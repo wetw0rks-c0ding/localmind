@@ -40,3 +40,19 @@
   - Additional crops/sheets: `prefill-contact-status-crop-0-6s/6-12s/12-18s.png`, `prefill-contact-composer-0-6s/6-12s/12-18s.png` (`1080x420+0+2050`), and `prefill-contact-status-0-6s/6-12s/12-18s.png` (uncropped status sheets).
 - **Candidate exported frame:** `docs/validation/prefill-frame.png` = extracted `f_0020.png` (~2.0 s into recording, ~1 s after send tap) as a promising early frame for visual review. **Text not machine-read in this pass** (no OCR/vision confirmation here); whether it shows a prefill-percentage status line distinct from `0 tok · 0.0 tok/s` is unconfirmed — contact sheets and frame retained for vision review.
 - **Outcome:** a definitive prefill-percentage frame/text was **not confirmed** from this offline extraction pass alone; likely candidates (if any) are in early 0–6 s status/contact-sheet region around scene changes ~0.62–0.85 s and nearby extracted frames.
+
+## Prefill percentage captured (post-fix)
+
+After the 400 ms reveal gate was removed (`53882b2`), the percentage state is
+visible on the Pixel 6 with the on-device Qwen 3 0.6B model.
+
+- `prefill-percentage.png` — frame at t≈2.0 s from `screenrecord` during a long
+  prompt send. Status line reads **`Processing prompt… 56%`** with the arc.
+- `prefill-thinking.png` — same chat several seconds later (keyboard up), status
+  unchanged at `Processing prompt… 56%` while the reply had not started.
+
+Known follow-up: the percentage holds at its first computed value (56% here)
+instead of advancing, because nothing rebuilds the widget while prefill runs —
+the value is computed once from `live.startedAt` and only changes when chat
+state changes. A periodic tick during `processingPrompt` is needed for it to
+animate like LM Studio's.
