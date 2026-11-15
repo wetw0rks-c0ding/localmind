@@ -1,0 +1,25 @@
+name: beta
+
+# Beta builds: every push to the `beta` branch, plus on demand.
+# Published as prereleases tagged v<version>-beta.<run>.
+
+on:
+  push:
+    branches: [beta]
+  workflow_dispatch:
+
+concurrency:
+  group: beta
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build.yml
+    with:
+      channel: beta
+      prerelease: true
+      retention: 10
+    secrets: inherit

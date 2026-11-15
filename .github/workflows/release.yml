@@ -1,0 +1,41 @@
+name: release
+
+# Stable releases: push a tag like v1.9.2 or v1.9.2+97.
+# Published as a full (non-prerelease) GitHub release with APK + AAB.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      is_stable: ${{ steps.check.outputs.is_stable }}
+    steps:
+      - id: check
+        run: |
+          tag="${{ github.ref_name }}"
+          if [[ "$tag" == *-beta.* || "$tag" == *-nightly.* || "$tag" == nightly-* ]]; then
+            echo "is_stable=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_stable=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: guard
+    if: needs.guard.outputs.is_stable == 'true'
+    uses: ./.github/workflows/_build.yml
+    with:
+      channel: stable
+      tag: ${{ github.ref_name }}
+      prerelease: false
+    secrets: inherit

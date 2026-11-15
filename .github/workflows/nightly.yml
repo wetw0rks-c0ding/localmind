@@ -1,0 +1,25 @@
+name: nightly
+
+# Nightly builds: every day at 04:17 UTC from master, plus on demand.
+# Published as prereleases tagged nightly-YYYYMMDD-<sha>.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build.yml
+    with:
+      channel: nightly
+      prerelease: true
+      retention: 7
+    secrets: inherit
