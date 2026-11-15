@@ -2590,6 +2590,7 @@ class ChatNotifier extends Notifier<ChatState> {
       continuationMessage.conversationId,
       origin.server,
       origin.chatService,
+      countsAsPrompt: origin.countsAsPrompt,
     );
     await _runAssistantStream(
       session,
