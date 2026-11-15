@@ -214,6 +214,7 @@ jobs:
 
       - name: Prune old releases in channel
         if: ${{ inputs.retention > 0 }}
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           CHANNEL: ${{ inputs.channel }}
@@ -221,15 +222,15 @@ jobs:
         run: |
           set -euo pipefail
           case "$CHANNEL" in
-            nightly) pattern='^nightly-' ;;
-            beta)    pattern="-beta\\." ;;
+            nightly) jq_filter='select(.tagName | startswith("nightly-"))' ;;
+            beta)    jq_filter='select(.tagName | contains("-beta."))' ;;
             *)       exit 0 ;;
           esac
           gh release list --limit 100 --json tagName,createdAt \
-            --jq ".[] | select(.tagName | test(\"$pattern\")) | .tagName" \
+            --jq "[.[] | $jq_filter] | sort_by(.createdAt) | reverse | .[].tagName" \
             | tail -n +$(( RETENTION + 1 )) \
             | while read -r tag; do
-                [[ -n "$tag" ]] || continue
+                [ -n "$tag" ] || continue
                 echo "Deleting old release $tag"
                 gh release delete "$tag" --yes --cleanup-tag
               done
