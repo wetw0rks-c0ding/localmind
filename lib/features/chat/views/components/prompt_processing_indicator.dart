@@ -168,6 +168,9 @@ class _ProcessingIndicator extends StatelessWidget {
     // The estimate never claims completion: prefill is still running until the
     // first token arrives, and rounding 0.999 would print "100%" too early.
     final pct = (progress * 100).round().clamp(0, 99);
+    // Keep the arc in step with the label so its semantics do not report 100%
+    // while prefill is still running either.
+    final arc = pct / 100;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -175,7 +178,7 @@ class _ProcessingIndicator extends StatelessWidget {
           width: 12,
           height: 12,
           child: CircularProgressIndicator(
-            value: progress,
+            value: arc,
             strokeWidth: 2,
             backgroundColor: (isDark ? Colors.white : Colors.black).withValues(
               alpha: 0.12,

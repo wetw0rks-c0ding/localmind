@@ -155,6 +155,34 @@ void main() {
       expect(find.textContaining('Processing prompt'), findsOneWidget);
       expect(find.textContaining('100%'), findsNothing);
       expect(find.textContaining('99%'), findsOneWidget);
+
+      final arc = tester.widget<CircularProgressIndicator>(
+        find.byType(CircularProgressIndicator),
+      );
+      expect(arc.value, lessThanOrEqualTo(0.99));
+    });
+
+    testWidgets('caps the arc when the backend reports full progress', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          chatState: ChatState(
+            liveGeneration: LiveGeneration(
+              phase: LiveGenerationPhase.processingPrompt,
+              startedAt: DateTime.now().subtract(const Duration(seconds: 2)),
+              estimatedPrefillMs: 1000,
+              realPrefillProgress: 1.0,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.textContaining('99%'), findsOneWidget);
+      final arc = tester.widget<CircularProgressIndicator>(
+        find.byType(CircularProgressIndicator),
+      );
+      expect(arc.value, 0.99);
     });
   });
 
