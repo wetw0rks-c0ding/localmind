@@ -1,0 +1,95 @@
+import '../../../../core/constants/app_constants.dart';
+import '../../providers/chat_reasoning_providers.dart';
+
+class ChatParameters {
+  final double temperature;
+  final double topP;
+  final int maxTokens;
+  final int contextLength;
+  final String? systemPrompt;
+  final int? topK;
+  final double? minP;
+  final double? repeatPenalty;
+
+  /// When false, remote chat services omit the field from the request body.
+  /// Local runtimes always use the value.
+  final bool sendTemperature;
+  final bool sendTopP;
+
+  /// Null when the active model doesn't support reasoning (no reasoning
+  /// control fields should be sent); otherwise reflects the Think toggle.
+  final bool? reasoningEnabled;
+  final ReasoningEffort reasoningEffort;
+
+  /// Raw reasoning `allowed_options` for the active model (e.g. LM Studio
+  /// `["low","medium","high","xhigh"]`, `["off","on"]`; Ollama binary
+  /// `["off","on"]` or GPT-OSS `["low","medium","high"]`). Null when unknown
+  /// (legacy servers) or for providers without per-model options. Lets
+  /// [LMStudioChatService] and Ollama send exactly what the server advertises
+  /// and omit the key when `off` isn't allowed instead of triggering HTTP 400.
+  final List<String>? reasoningAllowedOptions;
+
+  /// Raw reasoning default for the active model. Used as a tie-breaker when
+  /// snapping efforts.
+  final String? reasoningDefaultOption;
+
+  const ChatParameters({
+    required this.temperature,
+    required this.topP,
+    required this.maxTokens,
+    required this.contextLength,
+    this.systemPrompt,
+    this.topK,
+    this.minP,
+    this.repeatPenalty,
+    this.sendTemperature = true,
+    this.sendTopP = true,
+    this.reasoningEnabled,
+    this.reasoningEffort = ReasoningEffort.low,
+    this.reasoningAllowedOptions,
+    this.reasoningDefaultOption,
+  });
+
+  factory ChatParameters.defaults() => const ChatParameters(
+    temperature: AppConstants.defaultTemperature,
+    topP: AppConstants.defaultTopP,
+    maxTokens: AppConstants.defaultMaxTokens,
+    contextLength: AppConstants.defaultContextLength,
+  );
+
+  ChatParameters copyWith({
+    double? temperature,
+    double? topP,
+    int? maxTokens,
+    int? contextLength,
+    String? systemPrompt,
+    int? topK,
+    double? minP,
+    double? repeatPenalty,
+    bool? sendTemperature,
+    bool? sendTopP,
+    bool? reasoningEnabled,
+    ReasoningEffort? reasoningEffort,
+    List<String>? reasoningAllowedOptions,
+    String? reasoningDefaultOption,
+  }) {
+    return ChatParameters(
+      temperature: temperature ?? this.temperature,
+      topP: topP ?? this.topP,
+      maxTokens: maxTokens ?? this.maxTokens,
+      contextLength: contextLength ?? this.contextLength,
+      systemPrompt: systemPrompt ?? this.systemPrompt,
+      topK: topK ?? this.topK,
+      minP: minP ?? this.minP,
+      repeatPenalty: repeatPenalty ?? this.repeatPenalty,
+      sendTemperature: sendTemperature ?? this.sendTemperature,
+      sendTopP: sendTopP ?? this.sendTopP,
+      reasoningEnabled: reasoningEnabled ?? this.reasoningEnabled,
+      reasoningEffort: reasoningEffort ?? this.reasoningEffort,
+      reasoningAllowedOptions:
+          reasoningAllowedOptions ?? this.reasoningAllowedOptions,
+      reasoningDefaultOption:
+          reasoningDefaultOption ?? this.reasoningDefaultOption,
+    );
+  }
+}

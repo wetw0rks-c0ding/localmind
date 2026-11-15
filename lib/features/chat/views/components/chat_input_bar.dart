@@ -1,0 +1,1289 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:hugeicons/hugeicons.dart';
+import 'package:localmind/features/chat/views/components/token_usage_indicator.dart';
+import 'prompt_processing_indicator.dart';
+
+import '../../../../core/models/enums.dart';
+import '../../../../core/providers/app_providers.dart';
+import '../../../../core/services/app_haptics.dart';
+import '../../../../core/utils/safe_file_picker.dart';
+import '../../../../core/theme/colors.dart';
+import '../../../../l10n/app_localizations.dart';
+import '../../../conversations/providers/conversation_providers.dart' as conv;
+import '../../../saved_messages/views/components/saved_message_picker_sheet.dart';
+import '../../../servers/providers/server_providers.dart';
+import '../../../stt/providers/stt_providers.dart';
+import '../../../stt/utils/stt_error_messages.dart';
+import '../../../tts/providers/tts_providers.dart';
+import '../../../voice_mode/providers/voice_mode_provider.dart';
+import '../../providers/chat_providers.dart';
+import '../../utils/attachment_helpers.dart';
+import '../../utils/image_upload_utils.dart';
+import '../../../models/views/model_picker_sheet.dart';
+import '../../../os_widget/providers/os_widget_providers.dart';
+import 'attach_sheet.dart';
+import 'image_preview_dialog.dart';
+import '../../../voice_mode/views/voice_mode_overlay.dart';
+
+class ChatInputBar extends ConsumerStatefulWidget {
+  const ChatInputBar({
+    super.key,
+
+    required this.onSend,
+
+    required this.onStop,
+
+    this.onAttach,
+
+    this.enabled = true,
+
+    this.sendBlocked = false,
+    this.hasNoticeAbove = false,
+    this.isStreaming = false,
+
+    this.focusNode,
+
+    this.keyboardIncognito = false,
+
+    this.totalTokenCount = 0,
+  });
+
+  final void Function(String message, {List<File>? attachments}) onSend;
+
+  final VoidCallback onStop;
+
+  final void Function(List<File> attachments)? onAttach;
+
+  final bool enabled;
+
+  /// Typing stays possible, but a reply can't be requested yet (another
+  /// chat's reply is still generating in the background, #94).
+  final bool sendBlocked;
+  final bool hasNoticeAbove;
+  final bool isStreaming;
+
+  final FocusNode? focusNode;
+
+  final bool keyboardIncognito;
+
+  final int totalTokenCount;
+
+  @override
+  ConsumerState<ChatInputBar> createState() => ChatInputBarState();
+}
+
+class ChatInputBarState extends ConsumerState<ChatInputBar>
+    with TickerProviderStateMixin {
+  final _normalController = TextEditingController();
+  final _incognitoController = TextEditingController();
+  late final FocusNode _focusNode;
+  late final FocusNode _incognitoFocus;
+
+  TextEditingController get _controller =>
+      widget.keyboardIncognito ? _incognitoController : _normalController;
+
+  FocusNode get _activeFocus =>
+      widget.keyboardIncognito ? _incognitoFocus : _focusNode;
+
+  final List<File> _attachedFiles = [];
+
+  bool _isGeneratingAiUser = false;
+  bool _sendAsAssistant = false;
+  bool _holdTriggered = false;
+
+  late AnimationController _sendButtonAnimController;
+
+  late Animation<double> _sendButtonScale;
+
+  late AnimationController _micAnimController;
+
+  /// Drives the clockwise ring drawn around the send button while it's held
+  /// down. Reaching the end (3s) triggers AI-generated-user-message instead
+  /// of the normal tap/short-hold actions.
+  late AnimationController _holdProgressController;
+
+  String _preSpeechText = '';
+  String? _lastStreamingConversationId;
+
+  @override
+  void initState() {
+    super.initState();
+
+    if (ref.read(isStreamingProvider)) {
+      _lastStreamingConversationId = ref.read(
+        conv.activeConversationIdProvider,
+      );
+    }
+
+    _focusNode = widget.focusNode ?? FocusNode();
+    _incognitoFocus = FocusNode();
+
+    _sendButtonAnimController = AnimationController(
+      duration: const Duration(milliseconds: 200),
+
+      vsync: this,
+    );
+
+    _sendButtonScale = Tween<double>(begin: 1.0, end: 1.1).animate(
+      CurvedAnimation(parent: _sendButtonAnimController, curve: Curves.easeOut),
+    );
+
+    _micAnimController = AnimationController(
+      duration: const Duration(milliseconds: 800),
+
+      vsync: this,
+    );
+
+    _holdProgressController =
+        AnimationController(duration: _holdDuration, vsync: this)
+          ..addStatusListener((status) {
+            if (status == AnimationStatus.completed) {
+              _holdTriggered = true;
+              _holdProgressController.value = 0;
+              _handleGenerateAiUser();
+            }
+          });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final pendingPrompt = ref.read(widgetPendingPromptProvider);
+      if (pendingPrompt != null && pendingPrompt.isNotEmpty) {
+        _controller.text = pendingPrompt;
+        _controller.selection = TextSelection.fromPosition(
+          TextPosition(offset: _controller.text.length),
+        );
+        _activeFocus.requestFocus();
+        ref.read(widgetPendingPromptProvider.notifier).consumePrompt();
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(ChatInputBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.keyboardIncognito == widget.keyboardIncognito) return;
+
+    final text = _normalController.text;
+    final selection = _normalController.selection;
+
+    if (widget.keyboardIncognito) {
+      _incognitoController.value = TextEditingValue(
+        text: text,
+        selection: selection,
+      );
+      if (_focusNode.hasFocus) {
+        _incognitoFocus.requestFocus();
+      }
+    } else {
+      _normalController.value = TextEditingValue(
+        text: text,
+        selection: selection,
+      );
+      if (_incognitoFocus.hasFocus) {
+        _focusNode.requestFocus();
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _normalController.dispose();
+    _incognitoController.dispose();
+
+    if (widget.focusNode == null) {
+      _focusNode.dispose();
+    }
+    _incognitoFocus.dispose();
+
+    _sendButtonAnimController.dispose();
+
+    _micAnimController.dispose();
+
+    _holdProgressController.dispose();
+
+    super.dispose();
+  }
+
+  void insertText(String text) {
+    final insert = text.trim();
+
+    if (insert.isEmpty) return;
+
+    final current = _controller.text;
+
+    if (current.isEmpty) {
+      _controller.text = insert;
+    } else {
+      _controller.text = '$current\n\n$insert';
+    }
+
+    setState(() {});
+
+    _activeFocus.requestFocus();
+
+    _controller.selection = TextSelection.fromPosition(
+      TextPosition(offset: _controller.text.length),
+    );
+  }
+
+  Future<void> _pickImages() async {
+    try {
+      final images = await SafeFilePicker.pickMultiImage(
+        imageQuality: 85,
+        context: context,
+      );
+
+      if (images.isEmpty) return;
+
+      final settings = ref.read(settingsProvider);
+      final compressed = <File>[];
+      for (final image in images) {
+        compressed.add(
+          await ImageUploadUtils.prepareImageFile(
+            File(image.path),
+            enabled: settings.imageCompressionEnabled,
+            level: settings.imageCompressionLevel,
+          ),
+        );
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _attachedFiles.addAll(compressed);
+      });
+
+      widget.onAttach?.call(_attachedFiles);
+    } catch (e) {
+      if (mounted) {
+        final l10n = AppLocalizations.of(context)!;
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(
+            content: Text(
+              SafeFilePicker.getErrorMessage(
+                e,
+                l10n,
+                fallbackMessage: l10n.image_pick_failed(e.toString()),
+              ),
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _pickDocuments() async {
+    try {
+      final result = await SafeFilePicker.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: AttachmentHelpers.supportedDocumentExtensions,
+        context: context,
+      );
+
+      if (result == null || result.files.isEmpty) return;
+
+      if (!mounted) return;
+      setState(() {
+        _attachedFiles.addAll(
+          result.files.where((f) => f.path != null).map((f) => File(f.path!)),
+        );
+      });
+
+      widget.onAttach?.call(_attachedFiles);
+    } catch (e) {
+      if (mounted) {
+        final l10n = AppLocalizations.of(context)!;
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(
+            content: Text(
+              SafeFilePicker.getErrorMessage(
+                e,
+                l10n,
+                fallbackMessage: l10n.file_pick_failed(e.toString()),
+              ),
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleInsertSavedMessage() async {
+    final content = await showSavedMessagePickerSheet(context);
+
+    if (content != null && content.isNotEmpty) {
+      insertText(content);
+    }
+  }
+
+  Future<void> _showAttachMenu() async {
+    final showRoleSwap = ref.read(settingsProvider).roleSwapButtonEnabled;
+    final result = await showAttachSheet(
+      context,
+      model: ref.read(selectedModelProvider),
+      sendAsAssistant: showRoleSwap ? _sendAsAssistant : null,
+      onSendAsAssistantChanged: (value) {
+        ref.read(appHapticsProvider).light();
+        setState(() => _sendAsAssistant = value);
+      },
+    );
+    if (!mounted || result == null) return;
+    switch (result) {
+      case AttachAction.documents:
+        await _pickDocuments();
+      case AttachAction.images:
+        await _pickImages();
+      case AttachAction.savedMessage:
+        await _handleInsertSavedMessage();
+    }
+  }
+
+  Future<void> _handleMicToggle() async {
+    final stt = ref.read(sttProvider.notifier);
+
+    final isListening = ref.read(sttProvider).isListening;
+
+    ref.read(appHapticsProvider).light();
+
+    if (isListening) {
+      await stt.stopListening();
+    } else {
+      _preSpeechText = _controller.text;
+
+      await stt.startListening(onResult: _onSpeechResult);
+    }
+  }
+
+  void _onSpeechResult(String words) {
+    if (words.isEmpty || !mounted) return;
+    setState(() {
+      if (_preSpeechText.isEmpty) {
+        _controller.text = words;
+      } else {
+        _controller.text = '$_preSpeechText $words';
+      }
+
+      _controller.selection = TextSelection.fromPosition(
+        TextPosition(offset: _controller.text.length),
+      );
+    });
+  }
+
+  Widget _buildMicButton(bool isListening, ThemeData theme) {
+    final l10n = AppLocalizations.of(context)!;
+
+    final isDark = theme.brightness == Brightness.dark;
+
+    return AnimatedBuilder(
+      animation: _micAnimController,
+
+      builder: (context, child) {
+        final pulseValue = isListening ? _micAnimController.value : 0.0;
+
+        return Container(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+
+            boxShadow: [
+              if (isListening)
+                BoxShadow(
+                  color: Colors.red.withValues(alpha: 0.4 * pulseValue),
+
+                  blurRadius: 8 + (8 * pulseValue),
+
+                  spreadRadius: 1 + (3 * pulseValue),
+                ),
+            ],
+          ),
+
+          child: Container(
+            width: 36,
+
+            height: 36,
+
+            decoration: BoxDecoration(
+              color: isListening
+                  ? Colors.red
+                  : theme.colorScheme.onSurface.withValues(alpha: 0.05),
+
+              shape: BoxShape.circle,
+            ),
+
+            child: IconButton(
+              padding: EdgeInsets.zero,
+
+              icon: HugeIcon(
+                icon: HugeIcons.strokeRoundedMic01,
+                size: 20,
+                color: isListening
+                    ? (isDark ? Colors.white : Colors.black)
+                    : theme.colorScheme.onSurface.withValues(alpha: 0.7),
+              ),
+
+              onPressed: _handleMicToggle,
+
+              tooltip: isListening
+                  ? l10n.stop_listening_tooltip
+                  : l10n.start_listening_tooltip,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildVoiceModeButton(ThemeData theme) {
+    final isDark = theme.brightness == Brightness.dark;
+    final modelReady = ref.watch(activeChatTargetProvider).isReady;
+    final l10n = AppLocalizations.of(context)!;
+
+    return Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        color: isDark
+            ? const Color(0xFF6366F1).withValues(alpha: 0.15)
+            : const Color(0xFF4F46E5).withValues(alpha: 0.1),
+        shape: BoxShape.circle,
+      ),
+      child: IconButton(
+        padding: EdgeInsets.zero,
+        icon: HugeIcon(
+          icon: HugeIcons.strokeRoundedAudioWave01,
+          size: 20,
+          color: isDark ? const Color(0xFF6366F1) : const Color(0xFF4F46E5),
+        ),
+        onPressed: !modelReady
+            ? () {
+                ref.read(appHapticsProvider).light();
+                ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+                  SnackBar(content: Text(l10n.model_required_toast)),
+                );
+                showModalBottomSheet(
+                  context: context,
+                  isScrollControlled: true,
+                  useSafeArea: true,
+                  builder: (_) => const ModelPickerSheet(),
+                );
+              }
+            : () {
+                ref.read(appHapticsProvider).light();
+                VoiceModeOverlay.show(context);
+              },
+        tooltip: modelReady ? 'Voice mode' : l10n.model_required_toast,
+      ),
+    );
+  }
+
+  Widget _buildAddButton(
+    bool isConnected,
+    ThemeData theme, {
+    required bool optionActive,
+  }) {
+    final l10n = AppLocalizations.of(context)!;
+    final isDark = theme.brightness == Brightness.dark;
+    final button = Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        color: isDark
+            ? Colors.white.withValues(alpha: 0.06)
+            : Colors.black.withValues(alpha: 0.05),
+        shape: BoxShape.circle,
+      ),
+      child: IconButton(
+        padding: EdgeInsets.zero,
+        icon: HugeIcon(
+          icon: HugeIcons.strokeRoundedAdd01,
+          size: 22,
+          color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+        ),
+        onPressed: isConnected ? _showAttachMenu : null,
+        tooltip: l10n.add_attachment,
+      ),
+    );
+    if (!optionActive) return button;
+    // Thinking or send-as-assistant is on; both live in the + sheet.
+    return Stack(
+      clipBehavior: .none,
+      children: [
+        button,
+        PositionedDirectional(
+          top: 1,
+          end: 1,
+          child: Container(
+            width: 9,
+            height: 9,
+            decoration: BoxDecoration(
+              color: theme.colorScheme.primary,
+              shape: .circle,
+              border: Border.all(
+                color: isDark
+                    ? AppColors.darkSurfaceInput
+                    : AppColors.lightSurface,
+                width: 1.5,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _handleSubmit() {
+    final text = _controller.text.trim();
+    final isImageGeneration = ref
+        .read(activeChatTargetProvider)
+        .isImageGeneration;
+    if (isImageGeneration &&
+        (ref.read(chatProvider).isTemporary || _attachedFiles.isNotEmpty)) {
+      return;
+    }
+
+    if (text.isEmpty && _attachedFiles.isEmpty) return;
+    // Keep the draft instead of clearing it for a send that can't start.
+    if (widget.sendBlocked && !_sendAsAssistant) return;
+
+    if (!_ensureChatTarget()) return;
+
+    ref.read(appHapticsProvider).medium();
+
+    if (_sendAsAssistant && !isImageGeneration) {
+      ref
+          .read(chatProvider.notifier)
+          .insertMessageWithoutGenerating(
+            text,
+            role: MessageRole.assistant,
+            attachments: List.from(_attachedFiles),
+          );
+    } else {
+      widget.onSend(text, attachments: List.from(_attachedFiles));
+    }
+
+    _controller.clear();
+
+    setState(() {
+      _attachedFiles.clear();
+      _sendAsAssistant = false;
+    });
+  }
+
+  void _handleInsertWithoutGenerating() {
+    final text = _controller.text.trim();
+    if (text.isEmpty && _attachedFiles.isEmpty) return;
+
+    if (!_ensureChatTarget()) return;
+
+    ref.read(appHapticsProvider).medium();
+    ref
+        .read(chatProvider.notifier)
+        .insertMessageWithoutGenerating(
+          text,
+          role: _sendAsAssistant ? MessageRole.assistant : MessageRole.user,
+          attachments: List.from(_attachedFiles),
+        );
+
+    _controller.clear();
+    setState(() {
+      _attachedFiles.clear();
+      _sendAsAssistant = false;
+    });
+  }
+
+  /// Returns true when the active server has a usable model target. When it
+  /// does not, prompts the user to choose an on-device model.
+  bool _ensureChatTarget() {
+    if (ref.read(activeChatTargetProvider).isReady) return true;
+    final l10n = AppLocalizations.of(context)!;
+    ScaffoldMessenger.maybeOf(
+      context,
+    )?.showSnackBar(SnackBar(content: Text(l10n.model_required_toast)));
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      builder: (_) => const ModelPickerSheet(),
+    );
+    return false;
+  }
+
+  void _handleStop() {
+    ref.read(appHapticsProvider).light();
+
+    widget.onStop();
+  }
+
+  Future<void> _handleGenerateAiUser() async {
+    if (_isGeneratingAiUser ||
+        widget.isStreaming ||
+        widget.sendBlocked ||
+        !widget.enabled) {
+      return;
+    }
+    setState(() => _isGeneratingAiUser = true);
+    try {
+      await ref.read(chatProvider.notifier).generateAiUserMessage();
+    } finally {
+      if (mounted) setState(() => _isGeneratingAiUser = false);
+    }
+  }
+
+  static const _holdDuration = Duration(milliseconds: 3000);
+  static const _insertHoldThreshold = 500 / 3000;
+
+  /// Reserve space on the right edge of the text field so long
+  /// messages never slide underneath the overlaid token-usage
+  /// indicator. Sized to comfortably fit a 6-digit token count.
+  static const double _tokenUsageReservedWidth = 70;
+
+  /// 16pt text at this height plus 8pt above and below makes one line of
+  /// the field exactly as tall as the 36pt buttons beside it, so they sit
+  /// centred on a single line and pinned to the bottom as it grows.
+  static const double _inputLineHeight = 1.25;
+
+  Widget _buildActionButton(bool canSend, ThemeData theme) {
+    final l10n = AppLocalizations.of(context)!;
+
+    final backgroundColor = widget.isStreaming
+        ? Colors.red
+        : theme.colorScheme.primary;
+
+    final iconColor = widget.isStreaming
+        ? Colors.white
+        : theme.colorScheme.onPrimary;
+
+    final connectionStatus = ref.watch(connectionStatusProvider);
+    final isConnected = connectionStatus == ConnectionStatus.connected;
+    final aiUserHoldEnabled =
+        !ref.watch(
+          activeChatTargetProvider.select((target) => target.isImageGeneration),
+        ) &&
+        ref.watch(settingsProvider.select((s) => s.aiUserResponseEnabled)) &&
+        isConnected &&
+        widget.enabled;
+
+    void handleTapDown() {
+      _holdTriggered = false;
+      if (canSend) _sendButtonAnimController.forward();
+      if (!widget.isStreaming && !_isGeneratingAiUser && aiUserHoldEnabled) {
+        _holdProgressController.forward(from: 0);
+      }
+    }
+
+    void resetHold() {
+      _holdProgressController.stop();
+      _holdProgressController.value = 0;
+    }
+
+    void handleTapUp() {
+      if (canSend) _sendButtonAnimController.reverse();
+      final holdFraction = _holdProgressController.value;
+      final wasTriggered = _holdTriggered;
+      resetHold();
+      _holdTriggered = false;
+
+      if (wasTriggered || _isGeneratingAiUser) return;
+
+      if (widget.isStreaming) {
+        _handleStop();
+        return;
+      }
+
+      if (holdFraction >= _insertHoldThreshold) {
+        _handleInsertWithoutGenerating();
+      } else if (canSend) {
+        _handleSubmit();
+      }
+    }
+
+    void handleTapCancel() {
+      if (canSend) _sendButtonAnimController.reverse();
+      resetHold();
+      _holdTriggered = false;
+    }
+
+    // Uses raw pointer callbacks instead of GestureDetector's onTapDown/
+    // onTapUp: those depend on winning the gesture arena, but a nested
+    // interactive descendant (the button's own tap target) can win instead,
+    // silently swallowing onTapUp and breaking the hold-timing logic below.
+    // Listener always fires regardless of who else claims the gesture.
+    return Listener(
+      key: const ValueKey('chat_send_button'),
+      onPointerDown: (_) => handleTapDown(),
+
+      onPointerUp: (_) => handleTapUp(),
+
+      onPointerCancel: (_) => handleTapCancel(),
+
+      child: Tooltip(
+        message: widget.isStreaming
+            ? l10n.stop_generation_tooltip
+            : l10n.send_message_tooltip,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            AnimatedBuilder(
+              animation: _holdProgressController,
+              builder: (context, child) {
+                if (_holdProgressController.value <= 0) {
+                  return const SizedBox(width: 44, height: 44);
+                }
+                return SizedBox(
+                  width: 44,
+                  height: 44,
+                  child: CircularProgressIndicator(
+                    value: _holdProgressController.value,
+                    strokeWidth: 2.5,
+                    backgroundColor: Colors.transparent,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      theme.colorScheme.primary,
+                    ),
+                  ),
+                );
+              },
+            ),
+            ScaleTransition(
+              scale: _sendButtonScale,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeOut,
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: backgroundColor.withValues(
+                    alpha: (canSend || widget.isStreaming) ? 1.0 : 0.2,
+                  ),
+                  shape: BoxShape.circle,
+                ),
+                child: Center(
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 150),
+                    transitionBuilder: (child, animation) {
+                      return ScaleTransition(scale: animation, child: child);
+                    },
+                    child: _isGeneratingAiUser
+                        ? SizedBox(
+                            key: const ValueKey('ai-user-generating'),
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: iconColor,
+                            ),
+                          )
+                        : widget.isStreaming
+                        ? HugeIcon(
+                            icon: HugeIcons.strokeRoundedStop,
+                            key: const ValueKey('stop'),
+                            color: iconColor,
+                            size: 18,
+                          )
+                        : canSend
+                        ? HugeIcon(
+                            icon: HugeIcons.strokeRoundedArrowRight01,
+                            key: ValueKey(canSend),
+                            color: iconColor,
+                            size: 18,
+                          )
+                        : HugeIcon(
+                            icon: HugeIcons.strokeRoundedArrowUp01,
+                            key: ValueKey(canSend),
+                            color: iconColor,
+                            size: 18,
+                          ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+
+    final theme = Theme.of(context);
+
+    final isDark = theme.brightness == Brightness.dark;
+
+    final connectionStatus = ref.watch(connectionStatusProvider);
+
+    final isImageGeneration = ref.watch(
+      activeChatTargetProvider.select((target) => target.isImageGeneration),
+    );
+    final imageNotice = isImageGeneration
+        ? ref.watch(chatProvider.select((state) => state.isTemporary))
+              ? l10n.image_generation_temporary
+              : _attachedFiles.isNotEmpty
+              ? l10n.image_generation_remove_attachments
+              : null
+        : null;
+    final isConnected =
+        connectionStatus == ConnectionStatus.connected || isImageGeneration;
+    final showRoleSwapButton = ref
+        .watch(settingsProvider)
+        .roleSwapButtonEnabled;
+    final reasoning = ref.watch(chatReasoningConfigProvider);
+
+    final selectedModel = ref.watch(selectedModelProvider);
+    final thinkingToggledOn =
+        (selectedModel?.supportsReasoning ?? false) &&
+        !(selectedModel?.reasoningMandatory ?? false) &&
+        reasoning.enabled;
+    final sendingAsAssistant =
+        !isImageGeneration && showRoleSwapButton && _sendAsAssistant;
+    final hint = isImageGeneration
+        ? l10n.image_generation_prompt
+        : sendingAsAssistant
+        ? l10n.chat_input_hint_assistant
+        : l10n.chat_input_hint;
+
+    final sttState = ref.watch(sttProvider);
+
+    final isListening = sttState.isListening;
+
+    if (isListening) {
+      if (!_micAnimController.isAnimating) {
+        _micAnimController.repeat(reverse: true);
+      }
+    } else {
+      if (_micAnimController.isAnimating) {
+        _micAnimController.stop();
+
+        _micAnimController.reset();
+      }
+    }
+
+    ref.listen<String?>(widgetPendingPromptProvider, (previous, next) {
+      if (next != null && next.isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          _controller.text = next;
+          _controller.selection = TextSelection.fromPosition(
+            TextPosition(offset: _controller.text.length),
+          );
+          _activeFocus.requestFocus();
+          ref.read(widgetPendingPromptProvider.notifier).consumePrompt();
+        });
+      }
+    });
+
+    ref.listen<String?>(sttProvider.select((s) => s.error), (previous, next) {
+      if (next != null && mounted) {
+        final voiceState = ref.read(voiceModeProvider);
+        final voiceActive =
+            voiceState.isActive || voiceState.phase != VoiceModePhase.idle;
+        if (voiceActive) return;
+
+        final message = sttErrorMessage(AppLocalizations.of(context), next);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          ScaffoldMessenger.maybeOf(
+            context,
+          )?.showSnackBar(SnackBar(content: Text(message)));
+        });
+      }
+    });
+
+    // Voice-to-voice: when the LLM stops producing output and any auto-TTS
+    // playback has finished (or was never scheduled), restart the mic so the
+    // user can speak again without pressing the mic button.
+    //
+    // NOTE: This callback is intentionally not async. Riverpod's `ref.listen`
+    // subscribes synchronously and tears the listener down when the widget
+    // deactivates, but an async listener that touches `ref` after an `await`
+    // throws
+    // "Using 'ref' when a widget is about to or has been unmounted is unsafe"
+    // if the State deactivates between the await and the next ref read.
+    // Schedule the actual restart on the microtask queue instead.
+    ref.listen<bool>(isStreamingProvider, (previous, next) {
+      if (next == true) {
+        _lastStreamingConversationId = ref.read(
+          conv.activeConversationIdProvider,
+        );
+        return;
+      }
+      if (previous != true || next != false || !mounted) return;
+      // When the user switches from a streaming chat to a non-streaming one,
+      // isStreamingProvider flips true → false because the *open* chat changed,
+      // not because a reply finished. Ignore that flip so auto-speak doesn't
+      // restart the mic on a chat switch (#94 concurrent generation).
+      final priorConvId = _lastStreamingConversationId;
+      _lastStreamingConversationId = null;
+      if (priorConvId != null &&
+          ref.read(activeGenerationsProvider).containsKey(priorConvId)) {
+        return;
+      }
+
+      final shouldAutoSpeak = ref.read(settingsProvider).autoSpeakEnabled;
+      final voiceState = ref.read(voiceModeProvider);
+      final voiceActive =
+          voiceState.isActive || voiceState.phase != VoiceModePhase.idle;
+      final ttsSpeaking = ref.read(ttsProvider).isSpeaking;
+      final sttActive = ref.read(sttProvider).isListening;
+      if (!shouldAutoSpeak || voiceActive || ttsSpeaking || sttActive) return;
+
+      _preSpeechText = _controller.text;
+      final preSpeechText = _preSpeechText;
+      Future.microtask(() async {
+        // Small delay so the OS finishes releasing the audio session before
+        // we ask for the microphone again.
+        await Future.delayed(const Duration(milliseconds: 200));
+        if (!mounted) return;
+        if (ref.read(sttProvider).isListening) return;
+        if (ref.read(isStreamingProvider)) return;
+        await ref
+            .read(sttProvider.notifier)
+            .startListening(onResult: _onSpeechResult);
+        // Ensure _preSpeechText didn't drift while the async chain ran.
+        if (mounted && _preSpeechText == preSpeechText) {
+          _preSpeechText = _controller.text;
+        }
+      });
+    });
+
+    final aiUserHoldEnabled = ref.watch(
+      settingsProvider.select((s) => s.aiUserResponseEnabled),
+    );
+    final showVoiceModeInSendSlot =
+        !isImageGeneration &&
+        !widget.isStreaming &&
+        !_isGeneratingAiUser &&
+        !aiUserHoldEnabled &&
+        _controller.text.trim().isEmpty &&
+        _attachedFiles.isEmpty;
+
+    final canSend =
+        widget.enabled &&
+        isConnected &&
+        (_controller.text.trim().isNotEmpty || _attachedFiles.isNotEmpty) &&
+        !widget.isStreaming &&
+        imageNotice == null &&
+        (!widget.sendBlocked || sendingAsAssistant);
+
+    return SafeArea(
+      top: false,
+      child: Container(
+        margin: EdgeInsets.only(
+          left: 12,
+          right: 12,
+          top: (widget.sendBlocked || widget.hasNoticeAbove) ? 0 : 8,
+          bottom: 8,
+        ),
+
+        padding: const EdgeInsets.all(6),
+
+        decoration: BoxDecoration(
+          color: isDark ? AppColors.darkSurfaceInput : AppColors.lightSurface,
+
+          borderRadius: BorderRadius.circular(26),
+
+          border: Border.all(
+            color: isDark
+                ? AppColors.darkBorder.withValues(alpha: 0.6)
+                : AppColors.lightBorder,
+            width: 1,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: isDark ? 0.25 : 0.06),
+              blurRadius: 18,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+
+          children: [
+            if (imageNotice != null)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 2),
+                child: Text(imageNotice, style: theme.textTheme.bodySmall),
+              ),
+            if (_attachedFiles.isNotEmpty) ...[
+              Padding(
+                padding: const EdgeInsets.only(left: 8, right: 8, top: 4),
+                child: SizedBox(
+                  height: 50,
+
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    scrollDirection: Axis.horizontal,
+
+                    itemCount: _attachedFiles.length,
+
+                    separatorBuilder: (_, _) => const SizedBox(width: 8),
+
+                    itemBuilder: (context, index) {
+                      final file = _attachedFiles[index];
+                      final isImage = AttachmentHelpers.isImagePath(file.path);
+
+                      return Stack(
+                        clipBehavior: Clip.none,
+
+                        children: [
+                          Container(
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(10),
+
+                              border: Border.all(
+                                color: isDark
+                                    ? AppColors.darkBorder
+                                    : AppColors.lightBorder,
+                              ),
+                            ),
+
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(9),
+
+                              child: isImage
+                                  ? GestureDetector(
+                                      onTap: () =>
+                                          showImagePreview(context, file.path),
+                                      child: Image.file(
+                                        file,
+                                        width: 48,
+                                        height: 48,
+                                        fit: BoxFit.cover,
+                                      ),
+                                    )
+                                  : Container(
+                                      width: 48,
+
+                                      height: 48,
+
+                                      color: theme
+                                          .colorScheme
+                                          .surfaceContainerHighest,
+
+                                      child: HugeIcon(
+                                        icon: HugeIcons.strokeRoundedFile01,
+
+                                        size: 22,
+
+                                        color: theme.colorScheme.primary,
+                                      ),
+                                    ),
+                            ),
+                          ),
+
+                          PositionedDirectional(
+                            top: -4,
+
+                            end: -4,
+
+                            child: GestureDetector(
+                              onTap: () => setState(
+                                () => _attachedFiles.removeAt(index),
+                              ),
+
+                              child: Container(
+                                width: 18,
+
+                                height: 18,
+
+                                decoration: const BoxDecoration(
+                                  color: Colors.black,
+
+                                  shape: BoxShape.circle,
+                                ),
+
+                                child: const HugeIcon(
+                                  icon: HugeIcons.strokeRoundedCancel01,
+
+                                  size: 10,
+
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                ),
+              ),
+            ],
+
+            const PromptProcessingStatusBar(),
+            // One row: add, the text (growing upward as it wraps), mic,
+            // and voice mode or send. Thinking and send-as-assistant live in
+            // the + sheet; a dot on + shows when either is on.
+            Row(
+              crossAxisAlignment: .end,
+              children: [
+                if (!isImageGeneration)
+                  _buildAddButton(
+                    isConnected,
+                    theme,
+                    optionActive: thinkingToggledOn || sendingAsAssistant,
+                  ),
+                Expanded(
+                  child: Stack(
+                    children: [
+                      IgnorePointer(
+                        ignoring: widget.keyboardIncognito,
+                        child: Opacity(
+                          opacity: widget.keyboardIncognito ? 0 : 1,
+                          child: TextField(
+                            key: const ValueKey('chat_input'),
+                            controller: _normalController,
+                            focusNode: _focusNode,
+                            enabled: widget.enabled,
+                            maxLines: 6,
+                            strutStyle: const StrutStyle(
+                              fontSize: 16,
+                              height: _inputLineHeight,
+                              forceStrutHeight: true,
+                            ),
+                            minLines: 1,
+                            textInputAction: TextInputAction.newline,
+                            keyboardType: TextInputType.multiline,
+                            enableSuggestions: true,
+                            autocorrect: true,
+                            enableIMEPersonalizedLearning: true,
+                            onChanged: (_) => setState(() {}),
+                            style: TextStyle(
+                              fontSize: 16,
+                              height: _inputLineHeight,
+                              color: theme.colorScheme.onSurface,
+                            ),
+                            decoration: InputDecoration(
+                              filled: false,
+                              border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              disabledBorder: InputBorder.none,
+                              hintText: hint,
+                              hintStyle: TextStyle(
+                                color: theme.colorScheme.onSurface.withValues(
+                                  alpha: 0.38,
+                                ),
+                                fontSize: 16,
+                                height: _inputLineHeight,
+                              ),
+                              isDense: true,
+                              contentPadding: EdgeInsets.fromLTRB(
+                                8,
+                                8,
+                                // Room for the token-usage indicator, which
+                                // only shows while the field is empty.
+                                _controller.text.isEmpty
+                                    ? _tokenUsageReservedWidth
+                                    : 4,
+                                8,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      IgnorePointer(
+                        ignoring: !widget.keyboardIncognito,
+                        child: Opacity(
+                          opacity: widget.keyboardIncognito ? 1 : 0,
+                          child: TextField(
+                            key: const ValueKey('chat_input_incognito'),
+                            controller: _incognitoController,
+                            focusNode: _incognitoFocus,
+                            enabled: widget.enabled,
+                            maxLines: 6,
+                            strutStyle: const StrutStyle(
+                              fontSize: 16,
+                              height: _inputLineHeight,
+                              forceStrutHeight: true,
+                            ),
+                            minLines: 1,
+                            textInputAction: TextInputAction.newline,
+                            keyboardType: TextInputType.multiline,
+                            enableSuggestions: false,
+                            autocorrect: false,
+                            enableIMEPersonalizedLearning: false,
+                            spellCheckConfiguration:
+                                const SpellCheckConfiguration.disabled(),
+                            smartDashesType: SmartDashesType.disabled,
+                            smartQuotesType: SmartQuotesType.disabled,
+                            onChanged: (_) => setState(() {}),
+                            style: TextStyle(
+                              fontSize: 16,
+                              height: _inputLineHeight,
+                              color: theme.colorScheme.onSurface,
+                            ),
+                            decoration: InputDecoration(
+                              filled: false,
+                              border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              disabledBorder: InputBorder.none,
+                              hintText: hint,
+                              hintStyle: TextStyle(
+                                color: theme.colorScheme.onSurface.withValues(
+                                  alpha: 0.38,
+                                ),
+                                fontSize: 16,
+                                height: _inputLineHeight,
+                              ),
+                              isDense: true,
+                              contentPadding: EdgeInsets.fromLTRB(
+                                8,
+                                8,
+                                // Room for the token-usage indicator, which
+                                // only shows while the field is empty.
+                                _controller.text.isEmpty
+                                    ? _tokenUsageReservedWidth
+                                    : 4,
+                                8,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      if (!isImageGeneration && _controller.text.isEmpty)
+                        Positioned(
+                          right: 4,
+                          top: 0,
+                          bottom: 0,
+                          child: Center(
+                            child: TokenUsageIndicator(
+                              totalTokenCount: widget.totalTokenCount,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                if (!isImageGeneration) _buildMicButton(isListening, theme),
+                const SizedBox(width: 6),
+                // An empty composer offers voice mode where send would be,
+                // unless holding send is set to draft the user's reply with
+                // AI — that gesture needs the send button.
+                if (showVoiceModeInSendSlot)
+                  _buildVoiceModeButton(theme)
+                else
+                  SizedBox(
+                    width: 36,
+                    height: 36,
+                    child: OverflowBox(
+                      maxWidth: 44,
+                      maxHeight: 44,
+                      child: _buildActionButton(canSend, theme),
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

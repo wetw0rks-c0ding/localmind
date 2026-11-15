@@ -1,0 +1,1033 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:flutter_gemma/flutter_gemma.dart' as gemma;
+
+import '../../../core/inference/local_inference.dart';
+import '../../../core/logger/app_logger.dart';
+import '../../../core/models/enums.dart';
+import '../../../core/utils/bpe_decoder.dart';
+import '../../chat/data/chat_api_error.dart';
+import '../../chat/data/chat_service.dart';
+import '../../chat/data/models/chat_parameters.dart';
+import '../../chat/data/models/mcp_integration.dart';
+import '../../chat/data/models/message.dart' hide ToolCallData;
+import '../../chat/data/tools/tool_definition.dart';
+import '../../chat/utils/attachment_helpers.dart';
+import '../../chat/utils/image_upload_utils.dart';
+import '../../servers/data/models/server.dart';
+import 'on_device_gemma_service.dart';
+
+/// Synthetic message ids whose presence signals an auxiliary generation
+/// (title, smart-reply, AI-suggested user message) rather than a real chat
+/// turn. Auxiliary runs are isolated from any retained chat session so their
+/// system prompts and context do not bleed into the user's primary
+/// conversation. Keep this list in sync with the synthetic ids emitted by
+/// `title_generation_service.dart` and `smart_reply_service.dart`.
+const Set<String> _auxiliaryMessageIds = {
+  'title-generation-prompt',
+  'smart-reply-prompt',
+  'ai-user-response-prompt',
+};
+
+/// How long an on-device chat session is retained after a successful turn
+/// without further activity. Retained sessions keep their KV cache in memory;
+/// this bounds the cost of background retention when a user abandons a
+/// conversation mid-stream.
+const Duration _defaultRetainedSessionTtl = Duration(minutes: 10);
+
+class OnDeviceChatService implements ChatService {
+  OnDeviceChatService(
+    this._gemmaService, {
+    Duration retainedSessionTtl = _defaultRetainedSessionTtl,
+    this.coordinator,
+    this.imageCompressionEnabled = true,
+    this.imageCompressionLevel = ImageCompressionLevel.medium,
+    // The retained-session TTL is a separate constructor parameter (rather
+    // than an initializing formal) so it can have a default value; the
+    // lint suggestion doesn't apply when a default is involved.
+    // ignore: prefer_initializing_formals
+  }) : _retainedSessionTtl = retainedSessionTtl;
+
+  final OnDeviceInferenceService _gemmaService;
+  final InferenceCoordinator? coordinator;
+  final Duration _retainedSessionTtl;
+  final bool imageCompressionEnabled;
+  final ImageCompressionLevel imageCompressionLevel;
+  final Set<_InferenceRun> _activeRuns = <_InferenceRun>{};
+  _RetainedConversation? _retainedConversation;
+  Timer? _retainedExpirationTimer;
+  int _nextRunSequence = 0;
+  int _latestRunSequence = 0;
+  bool _isDisposed = false;
+
+  @override
+  Stream<ChatResponse> sendMessage({
+    required Server server,
+    required String modelId,
+    required List<Message> messages,
+    required ChatParameters params,
+    List<McpIntegration>? integrations,
+    List<ToolDefinition>? tools,
+    bool continueGeneration = false,
+  }) {
+    late final _InferenceRun run;
+    final controller = StreamController<ChatResponse>();
+    final sequence = ++_nextRunSequence;
+    run = _InferenceRun(controller, sequence);
+    controller.onCancel = () => _cancelRun(run, notifyListener: false);
+
+    if (_isDisposed) {
+      scheduleMicrotask(() async {
+        controller.add(
+          const ChatResponse(
+            type: ChatResponseType.error,
+            content: 'On-device chat service has been disposed',
+          ),
+        );
+        controller.add(const ChatResponse(type: ChatResponseType.done));
+        await controller.close();
+      });
+      return controller.stream;
+    }
+
+    final lease = coordinator?.tryAcquire();
+    if (coordinator != null && lease == null) {
+      controller.add(
+        const ChatResponse(
+          type: ChatResponseType.error,
+          content: 'The on-device model is busy.',
+        ),
+      );
+      controller.add(const ChatResponse(type: ChatResponseType.done));
+      unawaited(controller.close());
+      return controller.stream;
+    }
+    _latestRunSequence = sequence;
+    _activeRuns.add(run);
+    unawaited(
+      _startInference(
+        run,
+        modelId,
+        messages,
+        params,
+        tools ?? const [],
+      ).whenComplete(() => lease?.release()),
+    );
+    return controller.stream;
+  }
+
+  Future<void> _startInference(
+    _InferenceRun run,
+    String modelId,
+    List<Message> messages,
+    ChatParameters params,
+    List<ToolDefinition> tools,
+  ) async {
+    try {
+      final input = await _prepareInput(modelId, messages, params);
+      if (run.isCancelled) {
+        await _closeSession(run, stopGeneration: false);
+        return;
+      }
+      final hasCurrentImageAttachment =
+          input?.currentMessage.attachmentPaths.any(
+            AttachmentHelpers.isImagePath,
+          ) ??
+          false;
+      if (hasCurrentImageAttachment &&
+          !_gemmaService.currentModelSupportsVision) {
+        await _finishWithError(
+          run,
+          const ChatApiError(
+            message:
+                'The active model does not support image attachments. '
+                'Please select a vision-supported model like Gemma 4 or FastVLM.',
+            code: ChatApiError.onDeviceVisionNotSupportedCode,
+          ).encode(),
+        );
+        return;
+      }
+      if (input == null ||
+          (input.currentMessage.content.trim().isEmpty && !input.hasImages)) {
+        await _finishWithError(run, 'On-device chat requires a user message.');
+        return;
+      }
+      run.input = input;
+
+      // Auxiliary runs (titles, smart replies) never call tools. A turn that
+      // already carries tool results must answer with them rather than call
+      // again: small on-device models otherwise repeat the same call forever.
+      final sessionTools = input.isAuxiliary || input.toolResults.isNotEmpty
+          ? const <gemma.Tool>[]
+          : tools.map(_toGemmaTool).toList(growable: false);
+      run.toolNames = sessionTools.map((tool) => tool.name).toList();
+
+      final retained = _retainedConversation;
+
+      late final OnDeviceInferenceSession session;
+      late final bool reusedSession;
+      if (retained != null &&
+          _gemmaService.supportsChatSessionReuse &&
+          retained.canContinueWith(input, modelId, run.toolNames)) {
+        _retainedConversation = null;
+        _cancelRetainedExpiration();
+        session = retained.session;
+        run.sessionSupportsImages = retained.supportsImages;
+        reusedSession = true;
+      } else {
+        if (retained != null && !input.isAuxiliary) {
+          _retainedConversation = null;
+          _cancelRetainedExpiration();
+          await retained.session.close();
+        }
+        final modelSupportsVision = _gemmaService.currentModelSupportsVision;
+        session = await _gemmaService.createChat(
+          systemInstruction: input.baseSystemInstruction,
+          tools: sessionTools,
+          supportImage: modelSupportsVision,
+        );
+        run.sessionSupportsImages = modelSupportsVision;
+        reusedSession = false;
+      }
+      run.session = session;
+
+      if (run.isCancelled) {
+        await _closeSession(run, stopGeneration: false);
+        return;
+      }
+
+      await session.addQueryChunk(
+        input.toGemmaMessage(includeHistory: !reusedSession),
+      );
+
+      if (run.isCancelled) {
+        await _closeSession(run, stopGeneration: false);
+        return;
+      }
+
+      final isBpeModel =
+          modelId.toLowerCase().contains('qwen') ||
+          modelId.toLowerCase().contains('deepseek');
+      run.textDecoder = isBpeModel ? BpeDecoder() : null;
+      run.reasoningDecoder = isBpeModel ? BpeDecoder() : null;
+      run.generationStarted = true;
+
+      final completer = Completer<void>();
+      run.streamCompleter = completer;
+      run.subscription = session.generateChatResponseAsync().listen(
+        (response) => _handleResponse(run, response),
+        onDone: () async {
+          run.subscription = null;
+          await _finishSuccessfully(run);
+        },
+        onError: (Object error, StackTrace stackTrace) async {
+          run.subscription = null;
+          Log.error('OnDevice stream error: $error');
+          await _finishWithInferenceError(run, error);
+        },
+        cancelOnError: true,
+      );
+      await completer.future;
+    } catch (error, stackTrace) {
+      if (run.isCancelled) {
+        await _closeSession(run, stopGeneration: run.generationStarted);
+        return;
+      }
+      Log.error('OnDevice inference error: $error\n$stackTrace');
+      await _finishWithInferenceError(run, error);
+    }
+  }
+
+  /// Reports a failed run. When the native engine is left unusable, the
+  /// retained session is dropped and the model is reloaded in the background
+  /// so the next message (or a new chat) doesn't hit the same broken engine.
+  Future<void> _finishWithInferenceError(
+    _InferenceRun run,
+    Object error,
+  ) async {
+    if (!isCorruptedOnDeviceEngineError(error)) {
+      await _finishWithError(run, 'Inference error: $error');
+      return;
+    }
+
+    await _finishWithError(
+      run,
+      ChatApiError(
+        message: 'Inference error: $error',
+        code: ChatApiError.onDeviceEngineFailedCode,
+      ).encode(),
+      recover: () async {
+        try {
+          await _clearRetainedConversation();
+          await _gemmaService.recoverAfterInferenceFailure();
+        } catch (recoveryError) {
+          Log.error('On-device model recovery failed: $recoveryError');
+        }
+      },
+    );
+  }
+
+  void _handleResponse(_InferenceRun run, gemma.ModelResponse response) {
+    if (run.isCancelled || run.controller.isClosed) return;
+
+    try {
+      if (response is gemma.TextResponse && response.token.isNotEmpty) {
+        final content =
+            run.textDecoder?.decodeChunk(response.token) ?? response.token;
+        if (content.isNotEmpty) {
+          run.generatedContent.write(content);
+          run.controller.add(
+            ChatResponse(type: ChatResponseType.message, content: content),
+          );
+        }
+      } else if (response is gemma.FunctionCallResponse) {
+        _emitToolCall(run, response);
+      } else if (response is gemma.ParallelFunctionCallResponse) {
+        for (final call in response.calls) {
+          _emitToolCall(run, call);
+        }
+      } else if (response is gemma.ThinkingResponse &&
+          response.content.isNotEmpty) {
+        final content =
+            run.reasoningDecoder?.decodeChunk(response.content) ??
+            response.content;
+        if (content.isNotEmpty) {
+          run.controller.add(
+            ChatResponse(
+              type: ChatResponseType.reasoning,
+              reasoningContent: content,
+            ),
+          );
+        }
+      }
+    } catch (error, stackTrace) {
+      Log.error('OnDevice stream handling error: $error\n$stackTrace');
+      unawaited(
+        _finishWithError(run, 'Inference error: $error', abortGeneration: true),
+      );
+    }
+  }
+
+  void _emitToolCall(_InferenceRun run, gemma.FunctionCallResponse call) {
+    run.controller.add(
+      ChatResponse(
+        type: ChatResponseType.toolCall,
+        toolCall: ToolCallData(tool: call.name, arguments: call.args),
+      ),
+    );
+  }
+
+  Future<void> _finishSuccessfully(_InferenceRun run) async {
+    if (!run.beginFinishing()) return;
+
+    if (!run.isCancelled && !run.controller.isClosed) {
+      try {
+        final finalToken = run.textDecoder?.flush() ?? '';
+        final finalReasoning = run.reasoningDecoder?.flush() ?? '';
+        if (finalToken.isNotEmpty) {
+          run.generatedContent.write(finalToken);
+          run.controller.add(
+            ChatResponse(type: ChatResponseType.message, content: finalToken),
+          );
+        }
+        if (finalReasoning.isNotEmpty) {
+          run.controller.add(
+            ChatResponse(
+              type: ChatResponseType.reasoning,
+              reasoningContent: finalReasoning,
+            ),
+          );
+        }
+      } catch (error) {
+        Log.error('Error flushing BPE decoders: $error');
+      }
+    }
+
+    try {
+      await _retainOrCloseSession(run);
+    } catch (error) {
+      Log.warning('Could not close on-device chat session: $error');
+    }
+    await _closeController(run, notifyListener: !run.isCancelled);
+    _activeRuns.remove(run);
+    _completeRunFuture(run);
+  }
+
+  Future<void> _finishWithError(
+    _InferenceRun run,
+    String message, {
+    bool abortGeneration = false,
+    Future<void> Function()? recover,
+  }) async {
+    if (!run.beginFinishing()) return;
+
+    if (abortGeneration) {
+      final session = run.session;
+      if (session != null && run.generationStarted) {
+        try {
+          await session.stopGeneration();
+        } catch (error) {
+          Log.warning('Error stopping failed on-device generation: $error');
+        }
+      }
+      final subscription = run.subscription;
+      run.subscription = null;
+      await subscription?.cancel();
+    }
+    await _closeSession(run, stopGeneration: false);
+    await recover?.call();
+    if (!run.isCancelled && !run.controller.isClosed) {
+      run.controller.add(
+        ChatResponse(type: ChatResponseType.error, content: message),
+      );
+    }
+    await _closeController(run, notifyListener: !run.isCancelled);
+    _activeRuns.remove(run);
+    _completeRunFuture(run);
+  }
+
+  Future<void> _cancelRun(
+    _InferenceRun run, {
+    required bool notifyListener,
+  }) async {
+    // StreamController.onCancel may re-enter while cleanup is closing the
+    // controller. Waiting on that same cleanup future would deadlock the
+    // controller close, so repeated cancellation is deliberately a no-op.
+    if (run.isCancelled) return;
+    run.isCancelled = true;
+    if (!run.beginFinishing()) {
+      return;
+    }
+
+    final cleanup = () async {
+      final subscription = run.subscription;
+      run.subscription = null;
+      if (run.generationStarted) {
+        final session = run.session;
+        if (session != null) {
+          try {
+            await session.stopGeneration();
+          } catch (error) {
+            Log.warning('Error stopping on-device generation: $error');
+          }
+        }
+      }
+      await subscription?.cancel();
+      await _closeSession(run, stopGeneration: false);
+      await _closeController(run, notifyListener: notifyListener);
+      _activeRuns.remove(run);
+      _completeRunFuture(run);
+    }();
+    await cleanup;
+  }
+
+  void _completeRunFuture(_InferenceRun run) {
+    final completer = run.streamCompleter;
+    run.streamCompleter = null;
+    if (completer != null && !completer.isCompleted) {
+      completer.complete();
+    }
+  }
+
+  Future<void> _closeSession(
+    _InferenceRun run, {
+    required bool stopGeneration,
+  }) async {
+    final session = run.session;
+    run.session = null;
+    if (session == null) return;
+
+    if (stopGeneration) {
+      try {
+        await session.stopGeneration();
+      } catch (error) {
+        Log.warning('Error stopping on-device generation: $error');
+      }
+    }
+    try {
+      await session.close();
+    } catch (error) {
+      Log.warning('Error closing on-device chat session: $error');
+    }
+  }
+
+  Future<void> _retainOrCloseSession(_InferenceRun run) async {
+    final session = run.session;
+    run.session = null;
+    final input = run.input;
+    if (session == null) return;
+
+    if (!_gemmaService.supportsChatSessionReuse ||
+        run.isCancelled ||
+        input == null ||
+        input.isAuxiliary ||
+        run.sequence != _latestRunSequence ||
+        run.generatedContent.isEmpty) {
+      await session.close();
+      return;
+    }
+
+    final previous = _retainedConversation;
+    _cancelRetainedExpiration();
+    _retainedConversation = _RetainedConversation(
+      session: session,
+      conversationId: input.conversationId,
+      modelId: input.modelId,
+      baseSystemInstruction: input.baseSystemInstruction,
+      timeline: input.completedTimeline(run.generatedContent.toString()),
+      supportsImages: run.sessionSupportsImages,
+      toolNames: run.toolNames,
+    );
+    coordinator?.retain(_clearRetainedConversation);
+    _armRetainedExpiration();
+    if (previous != null && !identical(previous.session, session)) {
+      await previous.session.close();
+    }
+  }
+
+  void _armRetainedExpiration() {
+    _retainedExpirationTimer?.cancel();
+    _retainedExpirationTimer = Timer(_retainedSessionTtl, () {
+      if (_isDisposed) return;
+      final owner = coordinator;
+      if (owner == null) {
+        unawaited(_clearRetainedConversation());
+      } else {
+        // Expiration must not close a session while another owner is decoding.
+        final lease = owner.tryAcquire();
+        if (lease == null) {
+          _armRetainedExpiration();
+          return;
+        }
+        unawaited(_clearRetainedConversation().whenComplete(lease.release));
+      }
+    });
+  }
+
+  Future<void> _clearRetainedConversation() async {
+    final retained = _retainedConversation;
+    _retainedConversation = null;
+    _cancelRetainedExpiration();
+    await retained?.session.close();
+  }
+
+  void _cancelRetainedExpiration() {
+    coordinator?.forget(_clearRetainedConversation);
+    _retainedExpirationTimer?.cancel();
+    _retainedExpirationTimer = null;
+  }
+
+  Future<void> _closeController(
+    _InferenceRun run, {
+    required bool notifyListener,
+  }) async {
+    if (run.controller.isClosed) return;
+    if (notifyListener) {
+      run.controller.add(const ChatResponse(type: ChatResponseType.done));
+    }
+    await run.controller.close();
+  }
+
+  static gemma.Tool _toGemmaTool(ToolDefinition tool) => gemma.Tool(
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.inputSchema,
+  );
+
+  Future<_PreparedInput?> _prepareInput(
+    String modelId,
+    List<Message> messages,
+    ChatParameters params,
+  ) async {
+    // After the app runs a tool, the follow-up request ends with the user
+    // turn, the assistant turn that made the call, the tool results and an
+    // empty pending reply. Gemma sessions are rebuilt from text, so the
+    // results are folded into the user turn and the call turn is dropped.
+    final lastUserIndex = messages.lastIndexWhere(
+      (message) => message.role == MessageRole.user,
+    );
+    final turnTail = lastUserIndex == -1
+        ? const <Message>[]
+        : messages.sublist(lastUserIndex + 1);
+    final toolNamesByCallId = <String, String>{
+      for (final message in turnTail)
+        for (final call in message.toolCalls ?? const [])
+          call.id: call.toolName,
+    };
+    final toolResults = [
+      for (final message in turnTail)
+        if (message.role == MessageRole.tool)
+          _ToolResult(
+            toolName: toolNamesByCallId[message.toolCallId] ?? 'tool',
+            content: message.content,
+          ),
+    ];
+
+    final relevant = <Message>[];
+    for (var index = 0; index < messages.length; index++) {
+      final message = messages[index];
+      if (message.role != MessageRole.user &&
+          message.role != MessageRole.assistant &&
+          message.role != MessageRole.system) {
+        continue;
+      }
+      if (message.role == MessageRole.assistant) {
+        final isPendingReply =
+            index == messages.length - 1 && message.content.isEmpty;
+        final isToolCallTurn = message.toolCalls?.isNotEmpty ?? false;
+        if (!isPendingReply &&
+            ((toolResults.isNotEmpty && index > lastUserIndex) ||
+                (isToolCallTurn && message.content.trim().isEmpty))) {
+          continue;
+        }
+      }
+      relevant.add(message);
+    }
+
+    Message? pendingAssistant;
+    if (relevant.isNotEmpty &&
+        relevant.last.role == MessageRole.assistant &&
+        relevant.last.content.isEmpty) {
+      pendingAssistant = relevant.removeLast();
+    }
+
+    final systemMessages = <String>[];
+    for (final message in relevant) {
+      if (message.role == MessageRole.system) {
+        var content = message.content.trim();
+        final paths = message.attachmentPaths;
+        if (paths != null && paths.isNotEmpty) {
+          for (final path in paths) {
+            if (AttachmentHelpers.isDocumentPath(path)) {
+              final text = await AttachmentHelpers.readDocumentFile(path);
+              if (text != null && text.trim().isNotEmpty) {
+                content = AttachmentHelpers.appendTextAttachment(
+                  content,
+                  AttachmentHelpers.fileNameOf(path),
+                  text,
+                );
+              }
+            }
+          }
+        }
+        if (content.isNotEmpty) {
+          systemMessages.add(content);
+        }
+      }
+    }
+
+    final timelineMessages = relevant
+        .where(
+          (message) =>
+              message.role == MessageRole.user ||
+              message.role == MessageRole.assistant,
+        )
+        .toList(growable: false);
+
+    final modelSupportsVision = _gemmaService.currentModelSupportsVision;
+    final timeline = <_MessageSnapshot>[];
+    for (var index = 0; index < timelineMessages.length; index++) {
+      final message = timelineMessages[index];
+      final snapshot = await _MessageSnapshot.fromMessage(
+        message,
+        supportsVision: modelSupportsVision,
+        loadImages: index == timelineMessages.length - 1,
+        imageCompressionEnabled: imageCompressionEnabled,
+        imageCompressionLevel: imageCompressionLevel,
+      );
+      timeline.add(snapshot);
+    }
+    if (timeline.isEmpty) return null;
+
+    final currentMessage = timeline.last;
+    final history = timeline.sublist(0, timeline.length - 1);
+    final isAuxiliary = _auxiliaryMessageIds.contains(currentMessage.id);
+    final messageSystemInstruction = systemMessages.isEmpty
+        ? null
+        : systemMessages.join('\n\n');
+    final baseSystemInstruction = isAuxiliary
+        ? _nonEmpty(params.systemPrompt) ?? messageSystemInstruction
+        : messageSystemInstruction ?? _nonEmpty(params.systemPrompt);
+    if (currentMessage.role != MessageRole.user) {
+      Log.warning(
+        'Rebuilding an on-device session for assistant continuation; '
+        'history will be supplied as a transcript.',
+      );
+    }
+
+    return _PreparedInput(
+      conversationId: currentMessage.conversationId,
+      modelId: modelId,
+      baseSystemInstruction: baseSystemInstruction,
+      history: history,
+      currentMessage: currentMessage,
+      pendingAssistantId: pendingAssistant?.id,
+      isAuxiliary: isAuxiliary,
+      toolResults: currentMessage.role == MessageRole.user
+          ? toolResults
+          : const [],
+    );
+  }
+
+  static String? _nonEmpty(String? value) {
+    final trimmed = value?.trim();
+    return trimmed == null || trimmed.isEmpty ? null : trimmed;
+  }
+
+  @override
+  void cancelStream() {
+    for (final run in _activeRuns.toList()) {
+      unawaited(_cancelRun(run, notifyListener: true));
+    }
+  }
+
+  void dispose() {
+    if (_isDisposed) return;
+    _isDisposed = true;
+    cancelStream();
+    if (_retainedConversation == null) return;
+    final owner = coordinator;
+    final cleanup = owner == null
+        ? _clearRetainedConversation()
+        : owner.transition(_clearRetainedConversation);
+    unawaited(
+      cleanup.catchError((Object error) {
+        Log.warning('Could not close retained on-device session: $error');
+      }),
+    );
+  }
+}
+
+class _InferenceRun {
+  _InferenceRun(this.controller, this.sequence);
+
+  final StreamController<ChatResponse> controller;
+  final int sequence;
+  StreamSubscription<gemma.ModelResponse>? subscription;
+  OnDeviceInferenceSession? session;
+  Completer<void>? streamCompleter;
+  BpeDecoder? textDecoder;
+  BpeDecoder? reasoningDecoder;
+  _PreparedInput? input;
+  final StringBuffer generatedContent = StringBuffer();
+  bool generationStarted = false;
+  bool sessionSupportsImages = false;
+  List<String> toolNames = const [];
+  bool isCancelled = false;
+  bool _isFinishing = false;
+
+  bool beginFinishing() {
+    if (_isFinishing) return false;
+    _isFinishing = true;
+    return true;
+  }
+}
+
+class _PreparedInput {
+  const _PreparedInput({
+    required this.conversationId,
+    required this.modelId,
+    required this.baseSystemInstruction,
+    required this.history,
+    required this.currentMessage,
+    required this.pendingAssistantId,
+    required this.isAuxiliary,
+    this.toolResults = const [],
+  });
+
+  final String conversationId;
+  final String modelId;
+  final String? baseSystemInstruction;
+  final List<_MessageSnapshot> history;
+  final _MessageSnapshot currentMessage;
+  final String? pendingAssistantId;
+  final bool isAuxiliary;
+
+  /// Results of tools the model called for [currentMessage], in call order.
+  final List<_ToolResult> toolResults;
+
+  bool get hasImages => currentMessage.images.isNotEmpty;
+
+  String get _currentPrompt {
+    if (toolResults.isEmpty) return currentMessage.content;
+    final results = toolResults
+        .map((result) => '[${result.toolName}]\n${result.content}')
+        .join('\n\n');
+    return '${currentMessage.content}\n\n'
+        'Results from the tools you called:\n\n$results\n\n'
+        'Answer the message above using these results.';
+  }
+
+  gemma.Message toGemmaMessage({required bool includeHistory}) {
+    if (!includeHistory || history.isEmpty) {
+      return currentMessage.toGemmaMessage(
+        promptOverride: toolResults.isEmpty ? null : _currentPrompt,
+      );
+    }
+    final transcript = history
+        .map(
+          (message) =>
+              '${message.role == MessageRole.user ? 'User' : 'Assistant'}: '
+              '${message.content}',
+        )
+        .join('\n\n');
+    final currentLabel = currentMessage.role == MessageRole.user
+        ? 'Current user message'
+        : 'Assistant response to continue';
+    final fullText =
+        'Earlier conversation transcript (context only):\n\n$transcript\n\n'
+        '$currentLabel:\n$_currentPrompt';
+
+    if (currentMessage.images.isNotEmpty) {
+      var text = fullText;
+      if (text.trim().isEmpty) {
+        text = 'Describe the image.';
+      }
+      return gemma.Message.withImages(
+        text: text,
+        imageBytes: currentMessage.images,
+        isUser: currentMessage.role == MessageRole.user,
+      );
+    }
+
+    return gemma.Message.text(
+      text: fullText,
+      isUser: currentMessage.role == MessageRole.user,
+    );
+  }
+
+  List<_MessageSnapshot> completedTimeline(String response) {
+    if (currentMessage.role == MessageRole.assistant) {
+      return [
+        ...history,
+        currentMessage.copyWith(content: '${currentMessage.content}$response'),
+      ];
+    }
+    return [
+      ...history,
+      currentMessage,
+      _MessageSnapshot(
+        id: pendingAssistantId ?? 'generated-${currentMessage.id}',
+        conversationId: conversationId,
+        role: MessageRole.assistant,
+        content: response,
+      ),
+    ];
+  }
+}
+
+class _ToolResult {
+  const _ToolResult({required this.toolName, required this.content});
+
+  final String toolName;
+  final String content;
+}
+
+class _RetainedConversation {
+  const _RetainedConversation({
+    required this.session,
+    required this.conversationId,
+    required this.modelId,
+    required this.baseSystemInstruction,
+    required this.timeline,
+    required this.supportsImages,
+    required this.toolNames,
+  });
+
+  final OnDeviceInferenceSession session;
+  final String conversationId;
+  final String modelId;
+  final String? baseSystemInstruction;
+  final List<_MessageSnapshot> timeline;
+  final bool supportsImages;
+
+  /// Tools the session was opened with; they are fixed for its lifetime.
+  final List<String> toolNames;
+
+  bool canContinueWith(
+    _PreparedInput input,
+    String requestedModelId,
+    List<String> requestedToolNames,
+  ) {
+    if (input.hasImages && !supportsImages) {
+      return false;
+    }
+    return input.currentMessage.role == MessageRole.user &&
+        input.toolResults.isEmpty &&
+        _namesEqual(toolNames, requestedToolNames) &&
+        conversationId == input.conversationId &&
+        modelId == requestedModelId &&
+        baseSystemInstruction == input.baseSystemInstruction &&
+        _listEquals(timeline, input.history);
+  }
+
+  static bool _namesEqual(List<String> first, List<String> second) {
+    if (first.length != second.length) return false;
+    for (var index = 0; index < first.length; index++) {
+      if (first[index] != second[index]) return false;
+    }
+    return true;
+  }
+
+  static bool _listEquals(
+    List<_MessageSnapshot> first,
+    List<_MessageSnapshot> second,
+  ) {
+    if (first.length != second.length) return false;
+    for (var index = 0; index < first.length; index++) {
+      if (first[index] != second[index]) return false;
+    }
+    return true;
+  }
+}
+
+class _MessageSnapshot {
+  const _MessageSnapshot({
+    required this.id,
+    required this.conversationId,
+    required this.role,
+    required this.content,
+    this.images = const [],
+    this.attachmentPaths = const [],
+    this.attachmentSignatures = const [],
+  });
+
+  static Future<_MessageSnapshot> fromMessage(
+    Message message, {
+    bool supportsVision = false,
+    bool loadImages = true,
+    bool imageCompressionEnabled = true,
+    ImageCompressionLevel imageCompressionLevel = ImageCompressionLevel.medium,
+  }) async {
+    var content = message.content;
+    final images = <Uint8List>[];
+    final attachmentSignatures = <String>[];
+
+    final paths = message.attachmentPaths ?? const <String>[];
+
+    for (final path in paths) {
+      attachmentSignatures.add(await _attachmentSignature(path));
+      if (AttachmentHelpers.isDocumentPath(path)) {
+        final text = await AttachmentHelpers.readDocumentFile(path);
+        if (text != null && text.trim().isNotEmpty) {
+          content = AttachmentHelpers.appendTextAttachment(
+            content,
+            AttachmentHelpers.fileNameOf(path),
+            text,
+          );
+        }
+      } else if (loadImages &&
+          supportsVision &&
+          AttachmentHelpers.isImagePath(path)) {
+        final file = File(path);
+        try {
+          if (await file.exists()) {
+            final bytes = await ImageUploadUtils.prepareImageBytes(
+              file,
+              enabled: imageCompressionEnabled,
+              level: imageCompressionLevel,
+            );
+            images.add(bytes);
+          }
+        } catch (e) {
+          Log.warning('Failed to prepare image bytes for $path: $e');
+          try {
+            if (await file.exists()) {
+              images.add(await file.readAsBytes());
+            }
+          } catch (_) {}
+        }
+      }
+    }
+
+    return _MessageSnapshot(
+      id: message.id,
+      conversationId: message.conversationId,
+      role: message.role,
+      content: content,
+      images: List.unmodifiable(images),
+      attachmentPaths: List.unmodifiable(paths),
+      attachmentSignatures: List.unmodifiable(attachmentSignatures),
+    );
+  }
+
+  static Future<String> _attachmentSignature(String path) async {
+    try {
+      final stat = await File(path).stat();
+      return '$path|${stat.type}|${stat.size}|'
+          '${stat.modified.microsecondsSinceEpoch}';
+    } catch (_) {
+      return '$path|unavailable';
+    }
+  }
+
+  final String id;
+  final String conversationId;
+  final MessageRole role;
+  final String content;
+  final List<Uint8List> images;
+  final List<String> attachmentPaths;
+  final List<String> attachmentSignatures;
+
+  gemma.Message toGemmaMessage({String? promptOverride}) {
+    var text = promptOverride ?? content;
+    final isUser = role == MessageRole.user;
+    if (images.isNotEmpty) {
+      if (text.trim().isEmpty) {
+        text = 'Describe the image.';
+      }
+      return gemma.Message.withImages(
+        text: text,
+        imageBytes: images,
+        isUser: isUser,
+      );
+    }
+    return gemma.Message.text(text: text, isUser: isUser);
+  }
+
+  _MessageSnapshot copyWith({
+    String? content,
+    List<Uint8List>? images,
+    List<String>? attachmentPaths,
+    List<String>? attachmentSignatures,
+  }) => _MessageSnapshot(
+    id: id,
+    conversationId: conversationId,
+    role: role,
+    content: content ?? this.content,
+    images: images ?? this.images,
+    attachmentPaths: attachmentPaths ?? this.attachmentPaths,
+    attachmentSignatures: attachmentSignatures ?? this.attachmentSignatures,
+  );
+
+  @override
+  bool operator ==(Object other) {
+    return other is _MessageSnapshot &&
+        id == other.id &&
+        conversationId == other.conversationId &&
+        role == other.role &&
+        content == other.content &&
+        _listEquals(attachmentPaths, other.attachmentPaths) &&
+        _listEquals(attachmentSignatures, other.attachmentSignatures);
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    conversationId,
+    role,
+    content,
+    Object.hashAll(attachmentPaths),
+    Object.hashAll(attachmentSignatures),
+  );
+
+  static bool _listEquals(List<String> first, List<String> second) {
+    if (first.length != second.length) return false;
+    for (var i = 0; i < first.length; i++) {
+      if (first[i] != second[i]) return false;
+    }
+    return true;
+  }
+}

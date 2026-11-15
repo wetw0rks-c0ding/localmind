@@ -1,0 +1,297 @@
+import 'dart:io';
+
+import 'package:characters/characters.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:localmind/core/services/crash_report_service.dart';
+
+CrashReport _makeReport({
+  required Object error,
+  required StackTrace stack,
+  String? errorWidgetPayload,
+}) {
+  return CrashReport(
+    error: error,
+    errorType: error.runtimeType.toString(),
+    stackTrace: stack,
+    timestamp: DateTime(2026, 7, 20, 12, 0, 0),
+    appVersion: '1.5.2',
+    buildNumber: '57',
+    platform: 'Android',
+    osVersion: 'Android 14 (SDK 34)',
+    deviceManufacturer: 'TestManufacturer',
+    deviceModel: 'TestModel',
+    locale: 'en_US',
+    errorWidgetPayload: errorWidgetPayload,
+  );
+}
+
+void main() {
+  setUp(() {
+    CrashReportService.instance.resetForTesting();
+  });
+
+  group('CrashReport', () {
+    test('shortError returns first line when under limit', () {
+      final report = _makeReport(
+        error: Exception('Something went wrong'),
+        stack: StackTrace.current,
+      );
+      // Dart's `Exception.toString()` includes the type prefix
+      // ("Exception: ..."), and shortError surfaces the raw first line.
+      expect(report.shortError, 'Exception: Something went wrong');
+    });
+
+    test('shortError truncates long first lines to 80 chars', () {
+      final longMessage = 'A' * 200;
+      final report = _makeReport(
+        error: Exception(longMessage),
+        stack: StackTrace.current,
+      );
+      expect(report.shortError.length, 80);
+      // 77 chars kept from "Exception: AAA..." plus the ellipsis.
+      expect(report.shortError, 'Exception: ${'A' * 66}...');
+    });
+
+    test('shortError sanitizes user-specific paths', () {
+      final report = _makeReport(
+        error: Exception('File not found: /Users/janedoe/Documents/secret.txt'),
+        stack: StackTrace.current,
+      );
+      expect(report.shortError, isNot(contains('/Users/janedoe')));
+      expect(report.shortError, contains('/Users/<user>'));
+    });
+
+    test('shortError does not split emoji grapheme clusters', () {
+      final report = _makeReport(
+        error: Exception('🚀' * 100),
+        stack: StackTrace.current,
+      );
+      final value = report.shortError;
+      expect(value.characters.length, lessThanOrEqualTo(80));
+      // The trailing code unit must not be a lone high surrogate.
+      final lastCodeUnit = value.codeUnits.last;
+      expect(
+        lastCodeUnit < 0xD800 || lastCodeUnit > 0xDBFF,
+        isTrue,
+        reason: 'shortError should not end with a high surrogate',
+      );
+    });
+
+    test('markdownBody contains expected sections', () {
+      final report = _makeReport(
+        error: Exception('Oops'),
+        stack: StackTrace.fromString('#0 somewhere (file.dart:1:2)'),
+      );
+      final body = report.markdownBody;
+      expect(body, contains('## App Info'));
+      expect(body, contains('## Device Info'));
+      expect(body, contains('## Crash Details'));
+      expect(body, contains('## Stack Trace'));
+      expect(body, contains('## Steps to Reproduce'));
+      expect(body, contains('## Expected Behavior'));
+      expect(body, contains('## Actual Behavior'));
+      expect(body, contains('## Additional Context'));
+    });
+
+    test('markdownBody escapes triple backticks', () {
+      final report = _makeReport(
+        error: Exception('```code```'),
+        stack: StackTrace.fromString('#0 frame (file.dart:1:2)'),
+      );
+      final body = report.markdownBody;
+      expect(body, isNot(contains('```code```')));
+      expect(body, contains("'''code'''"));
+    });
+
+    test('markdownBody sanitizes user-specific paths', () {
+      final report = _makeReport(
+        error: Exception('File not found: /Users/janedoe/Documents/secret.txt'),
+        stack: StackTrace.fromString(
+          '#0 frame (/home/johndoe/app/main.dart:1:2)',
+        ),
+      );
+      final body = report.markdownBody;
+      expect(body, isNot(contains('/Users/janedoe')));
+      expect(body, isNot(contains('/home/johndoe')));
+      expect(body, contains('/Users/<user>'));
+      expect(body, contains('/home/<user>'));
+    });
+
+    test('generated GitHub URL stays under a safe length', () {
+      final longStack = '#0 frame (file.dart:1:2)\n' * 500;
+      final report = _makeReport(
+        error: Exception('Oops'),
+        stack: StackTrace.fromString(longStack),
+      );
+      final service = CrashReportService.instance;
+      final url = service.buildGitHubIssueUrl(report).toString();
+      expect(url.length, lessThan(8192));
+    });
+  });
+
+  group('CrashReportService', () {
+    test('buildGitHubIssueUrl prefills diagnostics without a template', () {
+      final report = _makeReport(
+        error: Exception('Boom'),
+        stack: StackTrace.current,
+      );
+      final uri = CrashReportService.instance.buildGitHubIssueUrl(report);
+      expect(uri.host, 'github.com');
+      expect(uri.path, '/abdulmominsakib/localmind/issues/new');
+      expect(uri.queryParameters, isNot(contains('template')));
+      expect(uri.queryParameters['labels'], 'crash,bug');
+      expect(uri.queryParameters['title'], 'Crash: Exception: Boom');
+      expect(uri.queryParameters['body'], report.markdownBody);
+    });
+
+    test('buildFeedbackIssueUrl points to the feedback form', () {
+      final uri = CrashReportService.instance.buildFeedbackIssueUrl();
+      expect(uri.path, '/abdulmominsakib/localmind/issues/new');
+      expect(uri.queryParameters['template'], 'crash_report.md');
+      expect(uri.queryParameters['labels'], 'feedback');
+      expect(uri.queryParameters['title'], 'Feedback');
+    });
+
+    test('capture deduplicates identical errors within the window', () {
+      final service = CrashReportService.instance;
+      final error = Exception('Same error');
+      final stack = StackTrace.current;
+
+      service.capture(error, stack);
+      expect(service.currentCrash.value, isNotNull);
+
+      service.clearCrash();
+      service.capture(error, stack);
+      expect(service.currentCrash.value, isNull);
+    });
+
+    test('UI errors are recorded without showing the crash screen', () {
+      final service = CrashReportService.instance;
+      final report = service.capture(
+        Exception('ListTile ink may be invisible'),
+        StackTrace.current,
+        showCrashScreen: false,
+      );
+
+      expect(report.error.toString(), contains('ListTile'));
+      expect(service.currentCrash.value, isNull);
+    });
+
+    test('out-of-storage errors are recorded without the crash screen', () {
+      final service = CrashReportService.instance;
+      // background_downloader forwards storage-isolate failures as strings
+      // from an unawaited future (#113).
+      const isolateError =
+          "FileSystemException: Creation failed, path = '/data/user/0/"
+          "pro.momin.localmind/files/backgroundDownloaderResumeData' "
+          '(OS Error: No space left on device, errno = 28)';
+      final report = service.capture(isolateError, StackTrace.empty);
+
+      expect(report.error, isolateError);
+      expect(service.currentCrash.value, isNull);
+
+      service.capture(
+        const FileSystemException(
+          'Creation failed',
+          '/data/user/0/app/files/x',
+          OSError('No space left on device', 28),
+        ),
+        StackTrace.current,
+      );
+      expect(service.currentCrash.value, isNull);
+    });
+
+    test('capture does not deduplicate different errors', () {
+      final service = CrashReportService.instance;
+      service.capture(Exception('First'), StackTrace.current);
+      service.clearCrash();
+      service.capture(Exception('Second'), StackTrace.current);
+      expect(service.currentCrash.value, isNotNull);
+    });
+
+    test('clearCrash resets the current crash', () {
+      final service = CrashReportService.instance;
+      service.capture(Exception('Oops'), StackTrace.current);
+      expect(service.currentCrash.value, isNotNull);
+      service.clearCrash();
+      expect(service.currentCrash.value, isNull);
+    });
+  });
+
+  group('CrashReportService.isBenignFrameworkError', () {
+    test('ignores failed UI-automation commands', () {
+      final stack = StackTrace.fromString(
+        '#0 MarionetteBinding._tap '
+        '(package:marionette_flutter/src/binding/marionette_binding.dart:1:1)',
+      );
+      expect(
+        CrashReportService.isBenignFrameworkError(
+          Exception('Element matching {key: x} not found'),
+          stack,
+        ),
+        isTrue,
+      );
+      expect(
+        CrashReportService.isBenignFrameworkError(
+          Exception('Element matching {key: x} not found'),
+          StackTrace.fromString('#0 main (package:localmind/main.dart:1:1)'),
+        ),
+        isFalse,
+      );
+    });
+
+    final selectionStack = StackTrace.fromString(
+      '#0      List.[] (dart:core-patch/growable_array.dart)\n'
+      '#1      MultiSelectableSelectionContainerDelegate.getSelectionGeometry '
+      '(package:flutter/src/widgets/selectable_region.dart:2643)\n',
+    );
+
+    test('ignores selection RangeError (#101)', () {
+      final error = RangeError.index(3, [1, 2, 3], 'length');
+      expect(
+        CrashReportService.isBenignFrameworkError(error, selectionStack),
+        isTrue,
+      );
+    });
+
+    test('ignores selection concurrent modification (#99)', () {
+      final error = ConcurrentModificationError(<int>[]);
+      expect(
+        CrashReportService.isBenignFrameworkError(error, selectionStack),
+        isTrue,
+      );
+    });
+
+    test('reports RangeError outside selection code', () {
+      final error = RangeError.index(3, [1, 2, 3], 'length');
+      expect(
+        CrashReportService.isBenignFrameworkError(
+          error,
+          StackTrace.fromString('#0      main (package:localmind/main.dart)'),
+        ),
+        isFalse,
+      );
+    });
+
+    test('ignores RenderFlex overflow errors', () {
+      final flexOverflowError = FlutterError(
+        'A RenderFlex overflowed by 0.148 pixels on the bottom.',
+      );
+      expect(
+        CrashReportService.isBenignFrameworkError(flexOverflowError),
+        isTrue,
+      );
+    });
+
+    test('ignores general pixel overflow errors', () {
+      final generalOverflow = FlutterError(
+        'The relevant error-causing widget was: Column\noverflowed by 12.5 pixels',
+      );
+      expect(
+        CrashReportService.isBenignFrameworkError(generalOverflow),
+        isTrue,
+      );
+    });
+  });
+}

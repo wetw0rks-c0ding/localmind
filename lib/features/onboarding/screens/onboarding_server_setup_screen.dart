@@ -1,0 +1,621 @@
+import 'package:hugeicons/hugeicons.dart';
+import 'dart:io' show Platform;
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:cue/cue.dart';
+
+import '../../../core/components/server_logo.dart';
+import '../../../core/constants/app_constants.dart';
+import '../../../core/models/enums.dart';
+import '../../../core/providers/service_providers.dart';
+import '../../../core/routes/app_routes.dart';
+import '../../../l10n/app_localizations.dart';
+import '../../servers/data/models/server.dart';
+import '../../servers/providers/server_providers.dart';
+import '../../servers/views/components/https_scheme_hint.dart';
+
+class OnboardingServerSetupScreen extends ConsumerStatefulWidget {
+  final ServerType selectedType;
+
+  const OnboardingServerSetupScreen({super.key, required this.selectedType});
+
+  @override
+  ConsumerState<OnboardingServerSetupScreen> createState() =>
+      _OnboardingServerSetupScreenState();
+}
+
+class _OnboardingServerSetupScreenState
+    extends ConsumerState<OnboardingServerSetupScreen> {
+  final _formKey = GlobalKey<FormState>();
+  late TextEditingController _nameController;
+  late TextEditingController _hostController;
+  late TextEditingController _portController;
+  late TextEditingController _apiKeyController;
+
+  bool _isTesting = false;
+  bool _isSaving = false;
+  String? _testResult;
+  bool _testSuccess = false;
+
+  @override
+  void initState() {
+    super.initState();
+    String defaultName = '';
+    String defaultPort = '';
+    String defaultHost = '';
+
+    switch (widget.selectedType) {
+      case ServerType.lmStudio:
+        defaultName = 'LM Studio';
+        defaultPort = AppConstants.lmStudioDefaultPort.toString();
+        defaultHost = Platform.isAndroid ? '192.168.0.0' : '127.0.0.1';
+        break;
+      case ServerType.openAICompatible:
+        defaultName = 'OpenAI Compatible';
+        defaultPort = AppConstants.openAICompatibleDefaultPort.toString();
+        defaultHost = Platform.isAndroid ? '192.168.0.0' : '127.0.0.1';
+        break;
+      case ServerType.ollama:
+        defaultName = 'Ollama';
+        defaultPort = AppConstants.ollamaDefaultPort.toString();
+        defaultHost = Platform.isAndroid ? '192.168.0.0' : '127.0.0.1';
+        break;
+      case ServerType.ollamaCloud:
+        defaultName = 'Ollama Cloud';
+        defaultHost = AppConstants.ollamaCloudBaseUrl;
+        defaultPort = AppConstants.ollamaCloudDefaultPort.toString();
+        break;
+      case ServerType.openRouter:
+        defaultName = 'OpenRouter';
+        defaultPort = '443';
+        break;
+      case ServerType.requesty:
+        defaultName = 'Requesty';
+        defaultPort = '443';
+        break;
+      case ServerType.onDevice:
+        defaultName = 'On-Device';
+        defaultPort = '0';
+        break;
+    }
+
+    _nameController = TextEditingController(text: defaultName);
+    _hostController = TextEditingController(text: defaultHost);
+    _portController = TextEditingController(text: defaultPort);
+    _apiKeyController = TextEditingController();
+    _lastHostScheme = isHttpsAddressInput(defaultHost) ? 'https' : 'http';
+    _hostController.addListener(_onHostChanged);
+  }
+
+  String _lastHostScheme = '';
+
+  int _defaultPortForType(ServerType type) {
+    return switch (type) {
+      ServerType.lmStudio => AppConstants.lmStudioDefaultPort,
+      ServerType.openAICompatible => AppConstants.openAICompatibleDefaultPort,
+      ServerType.ollama => AppConstants.ollamaDefaultPort,
+      ServerType.ollamaCloud => AppConstants.ollamaCloudDefaultPort,
+      ServerType.openRouter => 443,
+      ServerType.requesty => 443,
+      ServerType.onDevice => 0,
+    };
+  }
+
+  void _onHostChanged() {
+    final text = _hostController.text.trim();
+    final parsed = parseServerAddressInput(text);
+    if (parsed == null) return;
+
+    if (parsed.hasPort) {
+      _portController.text = parsed.port.toString();
+    } else if (parsed.scheme == 'https' && _lastHostScheme != 'https') {
+      final currentPort = int.tryParse(_portController.text.trim());
+      if (currentPort == _defaultPortForType(widget.selectedType)) {
+        _portController.text = '443';
+      }
+    } else if (parsed.scheme == 'http' && _lastHostScheme == 'https') {
+      final currentPort = int.tryParse(_portController.text.trim());
+      if (currentPort == 443) {
+        _portController.text = _defaultPortForType(
+          widget.selectedType,
+        ).toString();
+      }
+    }
+    _lastHostScheme = parsed.scheme;
+  }
+
+  @override
+  void dispose() {
+    _hostController.removeListener(_onHostChanged);
+    _nameController.dispose();
+    _hostController.dispose();
+    _portController.dispose();
+    _apiKeyController.dispose();
+    super.dispose();
+  }
+
+  Server _buildServer() {
+    final requiresCloudConfig = widget.selectedType == ServerType.ollamaCloud;
+    final defaultPort = _defaultPortForType(widget.selectedType);
+    String host;
+    int port;
+    String? pathPrefix;
+
+    if (requiresCloudConfig) {
+      host = AppConstants.ollamaCloudBaseUrl;
+      port = AppConstants.ollamaCloudDefaultPort;
+    } else {
+      final rawHost = _hostController.text.trim();
+      final parsed = parseServerAddressInput(rawHost);
+      if (parsed != null) {
+        final hasExplicitPort = parsed.hasPort;
+        host =
+            '${parsed.scheme}://${parsed.host}${hasExplicitPort ? ':${parsed.port}' : ''}';
+        final schemeDefaultPort = parsed.scheme == 'https' ? 443 : defaultPort;
+        port = hasExplicitPort
+            ? parsed.port
+            : (int.tryParse(_portController.text.trim()) ?? schemeDefaultPort);
+        final prefix = extractPathPrefix(parsed);
+        pathPrefix = prefix.isNotEmpty ? prefix : null;
+      } else {
+        host = rawHost;
+        port = int.tryParse(_portController.text.trim()) ?? defaultPort;
+        pathPrefix = null;
+      }
+    }
+
+    return Server(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      name: _nameController.text.trim(),
+      type: widget.selectedType,
+      host: host,
+      port: port,
+      apiKey: _isCloudProvider
+          ? _apiKeyController.text.trim()
+          : (_apiKeyController.text.trim().isNotEmpty
+                ? _apiKeyController.text.trim()
+                : null),
+      isDefault: true, // Make it default since it's the first one
+      createdAt: DateTime.now(),
+      lastConnectedAt: DateTime.now(),
+      status: ConnectionStatus.disconnected,
+      pathPrefix: pathPrefix,
+    );
+  }
+
+  bool get _isCloudProvider =>
+      widget.selectedType == ServerType.openRouter ||
+      widget.selectedType == ServerType.requesty ||
+      widget.selectedType == ServerType.ollamaCloud;
+
+  String? _validateHost(String? value) {
+    if (_isCloudProvider) return null;
+    final l10n = AppLocalizations.of(context);
+    if (value == null || value.trim().isEmpty) {
+      return l10n?.host_required ?? 'Host is required';
+    }
+    final parsed = parseServerAddressInput(value);
+    if (parsed == null) {
+      return l10n?.host_valid ?? 'Enter a valid host';
+    }
+    return null;
+  }
+
+  String? _validatePort(String? value) {
+    if (_isCloudProvider) return null;
+    final l10n = AppLocalizations.of(context);
+    if (value == null || value.trim().isEmpty) {
+      return l10n?.port_required ?? 'Port is required';
+    }
+    final port = int.tryParse(value.trim());
+    if (port == null || port < 1 || port > 65535) {
+      return l10n?.port_invalid ?? 'Enter a valid port number (1-65535)';
+    }
+    return null;
+  }
+
+  Future<void> _testConnection() async {
+    if (_formKey.currentState?.validate() != true) return;
+
+    // Defensive mounted check before any state mutation. Even though the
+    // entry point here is a user tap (which implies mounted == true), a
+    // stale callback could still trigger this method after the widget
+    // has been disposed. Without this guard the first setState would
+    // throw "Null check operator used on a null value" at
+    // package:flutter/src/widgets/framework.dart from
+    // `_element!.markNeedsBuild()`. See #65.
+    if (!mounted) return;
+    setState(() {
+      _isTesting = true;
+      _testResult = null;
+      _testSuccess = false;
+    });
+
+    final l10n = AppLocalizations.of(context);
+    final apiService = ref.read(serverApiServiceProvider);
+    final testServer = _buildServer();
+
+    try {
+      final isConnected = await apiService.testConnection(testServer);
+      if (!mounted) return;
+      setState(() {
+        _testSuccess = isConnected;
+        _testResult = isConnected
+            ? (l10n?.connection_successful ?? 'Connection successful')
+            : (l10n?.connection_failed ?? 'Connection failed');
+      });
+      if (isConnected) {
+        invalidateAvailableModelsCache(testServer.id);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _testSuccess = false;
+        _testResult = l10n?.error_with_message(e.toString()) ?? 'Error: $e';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isTesting = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _saveAndContinue() async {
+    if (_formKey.currentState?.validate() != true) return;
+
+    // Defensive mounted check before any state mutation. See #65.
+    if (!mounted) return;
+    setState(() {
+      _isSaving = true;
+    });
+
+    try {
+      final server = _buildServer();
+      await ref.read(serversProvider.notifier).addServer(server);
+      if (!mounted) return;
+      await ref.read(serversProvider.notifier).setDefault(server.id);
+      if (!mounted) return;
+      invalidateAvailableModelsCache(server.id);
+      ref.read(activeServerIdProvider.notifier).setActiveServer(server);
+
+      if (mounted) {
+        context.push(AppRoutes.onboardingTheme);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(
+            content: Text(
+              AppLocalizations.of(context)?.error_with_message(e.toString()) ??
+                  'Error: $e',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
+    }
+  }
+
+  String _serverTypeName(ServerType type, AppLocalizations l10n) {
+    switch (type) {
+      case ServerType.lmStudio:
+        return l10n.server_type_lm_studio;
+      case ServerType.openAICompatible:
+        return l10n.server_type_openai_display;
+      case ServerType.ollama:
+        return l10n.server_type_ollama;
+      case ServerType.ollamaCloud:
+        return l10n.server_type_ollama_cloud;
+      case ServerType.openRouter:
+        return l10n.server_type_openrouter;
+      case ServerType.requesty:
+        return l10n.server_type_requesty;
+      case ServerType.onDevice:
+        return l10n.server_type_on_device;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    final theme = Theme.of(context);
+    final isCloud = _isCloudProvider;
+    final isOllamaCloud = widget.selectedType == ServerType.ollamaCloud;
+    final isRequesty = widget.selectedType == ServerType.requesty;
+
+    return Scaffold(
+      appBar: AppBar(title: Text(l10n.setup_connection)),
+      body: SafeArea(
+        child: Cue.onMount(
+          motion: .smooth(),
+          child: Form(
+            key: _formKey,
+            child: ListView(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 24.0,
+                vertical: 16.0,
+              ),
+              children: [
+                Actor(
+                  acts: [.fadeIn(), .slideY(from: 0.08)],
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: theme.colorScheme.surfaceContainerHighest
+                          .withValues(alpha: 0.35),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: theme.colorScheme.outline.withValues(alpha: 0.2),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 44,
+                          height: 44,
+                          padding: widget.selectedType.hasLogo
+                              ? const EdgeInsets.all(5)
+                              : const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.surface,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: theme.colorScheme.outline.withValues(
+                                alpha: 0.15,
+                              ),
+                            ),
+                          ),
+                          child: Center(
+                            child: ServerLogo(
+                              type: widget.selectedType,
+                              size: widget.selectedType.hasLogo ? 30 : 22,
+                              iconColor: theme.colorScheme.primary,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 14),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _serverTypeName(widget.selectedType, l10n),
+                                style: theme.textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                l10n.setup_connection_desc(
+                                  widget.selectedType.name,
+                                ),
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Actor(
+                  delay: 60.ms,
+                  acts: [.fadeIn(), .slideY(from: 0.08)],
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const SizedBox(height: 32),
+                      TextFormField(
+                        controller: _nameController,
+                        decoration: InputDecoration(
+                          labelText: l10n.server_name,
+                          filled: true,
+                          fillColor: theme.colorScheme.surface,
+                        ),
+                        validator: (val) => val == null || val.trim().isEmpty
+                            ? l10n.name_required
+                            : null,
+                      ),
+                      const SizedBox(height: 16),
+                      if (!isCloud) ...[
+                        TextFormField(
+                          controller: _hostController,
+                          decoration: InputDecoration(
+                            labelText: l10n.host_label,
+                            filled: true,
+                            fillColor: theme.colorScheme.surface,
+                          ),
+                          validator: _validateHost,
+                        ),
+                        HttpsSchemeHint(controller: _hostController),
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: _portController,
+                          decoration: InputDecoration(
+                            labelText: l10n.port_label,
+                            filled: true,
+                            fillColor: theme.colorScheme.surface,
+                          ),
+                          validator: _validatePort,
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+                      TextFormField(
+                        controller: _apiKeyController,
+                        decoration: InputDecoration(
+                          labelText: isCloud
+                              ? l10n.api_key_required
+                              : l10n.api_key_optional,
+                          filled: true,
+                          fillColor: theme.colorScheme.surface,
+                          hintText: isCloud
+                              ? (isOllamaCloud
+                                    ? l10n.api_key_hint_ollama_cloud
+                                    : isRequesty
+                                    ? l10n.api_key_hint_requesty
+                                    : l10n.api_key_hint_openrouter)
+                              : null,
+                        ),
+                        validator: (val) {
+                          if (isCloud && (val == null || val.trim().isEmpty)) {
+                            return isOllamaCloud
+                                ? l10n.api_key_required_ollama_cloud
+                                : isRequesty
+                                ? l10n.api_key_required_requesty
+                                : l10n.api_key_required_openrouter;
+                          }
+                          if (isCloud &&
+                              widget.selectedType == ServerType.openRouter &&
+                              val != null &&
+                              !val.trim().startsWith('sk-')) {
+                            return l10n.api_key_format;
+                          }
+                          return null;
+                        },
+                        obscureText: true,
+                      ),
+                      if (isCloud) ...[
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.primary.withValues(
+                              alpha: 0.08,
+                            ),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: theme.colorScheme.primary.withValues(
+                                alpha: 0.2,
+                              ),
+                            ),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              HugeIcon(
+                                icon: HugeIcons.strokeRoundedShield01,
+                                size: 18,
+                                color: theme.colorScheme.primary,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  isOllamaCloud
+                                      ? l10n.ollama_cloud_disclosure
+                                      : isRequesty
+                                      ? l10n.requesty_disclosure
+                                      : l10n.openrouter_disclosure,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurface
+                                        .withValues(alpha: 0.8),
+                                    height: 1.4,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                Actor(
+                  delay: 120.ms,
+                  acts: [.fadeIn(), .slideY(from: 0.08)],
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const SizedBox(height: 24),
+                      if (_testResult != null)
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          margin: const EdgeInsets.only(bottom: 24),
+                          decoration: BoxDecoration(
+                            color: _testSuccess
+                                ? Colors.green.withValues(alpha: 0.1)
+                                : Colors.red.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: _testSuccess ? Colors.green : Colors.red,
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              HugeIcon(
+                                icon: _testSuccess
+                                    ? HugeIcons.strokeRoundedCheckmarkCircle01
+                                    : HugeIcons.strokeRoundedAlertCircle,
+                                color: _testSuccess ? Colors.green : Colors.red,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _testResult!,
+                                  style: TextStyle(
+                                    color: _testSuccess
+                                        ? Colors.green
+                                        : Colors.red,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ShadButton.outline(
+                        width: double.infinity,
+                        onPressed: _isTesting ? null : _testConnection,
+                        child: _isTesting
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : Text(l10n.test_connection),
+                      ),
+                      const SizedBox(height: 16),
+                      ShadButton(
+                        width: double.infinity,
+                        onPressed: _isSaving ? null : _saveAndContinue,
+                        child: _isSaving
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Text(
+                                l10n.save_continue,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}

@@ -1,0 +1,207 @@
+import 'package:flutter_gemma/flutter_gemma.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+
+import '../../features/chat/data/models/mcp_integration.dart';
+import '../../features/chat/utils/image_upload_utils.dart';
+import '../../features/settings/data/models/app_settings.dart';
+import '../models/enums.dart';
+import '../../features/tts/data/kitten_tts_model.dart';
+import 'storage_providers.dart';
+import '../theme/app_theme.dart';
+
+final themeModeProvider = NotifierProvider<ThemeModeNotifier, AppThemeType>(() {
+  return ThemeModeNotifier();
+});
+
+class ThemeModeNotifier extends Notifier<AppThemeType> {
+  @override
+  AppThemeType build() {
+    final prefs = ref.watch(sharedPreferencesProvider);
+    final savedMode = prefs.getInt('themeMode');
+    if (savedMode != null &&
+        savedMode >= 0 &&
+        savedMode < AppThemeType.values.length) {
+      return AppThemeType.values[savedMode];
+    }
+    return AppThemeType.system;
+  }
+
+  void setThemeMode(AppThemeType mode) {
+    final prefs = ref.read(sharedPreferencesProvider);
+    state = mode;
+    prefs.setInt('themeMode', mode.index);
+  }
+}
+
+final settingsProvider = NotifierProvider<SettingsNotifier, AppSettings>(() {
+  return SettingsNotifier();
+});
+
+class SettingsNotifier extends Notifier<AppSettings> {
+  @override
+  AppSettings build() {
+    final prefs = ref.watch(sharedPreferencesProvider);
+    final savedJson = prefs.getString('appSettings');
+    if (savedJson != null) {
+      try {
+        return AppSettings.fromJson(savedJson);
+      } catch (_) {}
+    }
+    return AppSettings();
+  }
+
+  Future<void> updateSettings(AppSettings appSettings) async {
+    final prefs = ref.read(sharedPreferencesProvider);
+    state = appSettings;
+    await prefs.setString('appSettings', appSettings.toJson());
+  }
+
+  void setTemperature(double value) =>
+      _update(state.copyWith(temperature: value));
+  void setTopP(double value) => _update(state.copyWith(topP: value));
+  void setMaxTokens(int value) => _update(state.copyWith(maxTokens: value));
+  void setContextLength(int value) =>
+      _update(state.copyWith(contextLength: value));
+  void setFontSize(double value) => _update(state.copyWith(fontSize: value));
+  void setShowSystemMessages(bool value) =>
+      _update(state.copyWith(showSystemMessages: value));
+  void setHapticFeedback(bool value) =>
+      _update(state.copyWith(hapticFeedbackEnabled: value));
+  void setSendOnEnter(bool value) =>
+      _update(state.copyWith(sendOnEnter: value));
+  void setDefaultServer(String? id) =>
+      _update(state.copyWith(defaultServerId: id));
+  void setShowDataIndicator(bool value) =>
+      _update(state.copyWith(showDataIndicator: value));
+  void setAutoGenerateTitle(bool value) =>
+      _update(state.copyWith(autoGenerateTitle: value));
+  void setStreamingEnabled(bool value) =>
+      _update(state.copyWith(streamingEnabled: value));
+  void setDefaultPersona(String? id) =>
+      _update(state.copyWith(defaultPersonaId: id));
+  void setDefaultModel({String? serverId, String? modelId}) => _update(
+    state.copyWith(defaultModelServerId: serverId, defaultModelId: modelId),
+  );
+  void clearDefaultModel() =>
+      _update(state.copyWith(defaultModelServerId: null, defaultModelId: null));
+  void setHasCompletedOnboarding(bool value) =>
+      _update(state.copyWith(hasCompletedOnboarding: value));
+  void setMcpEnabled(bool value) => _update(state.copyWith(mcpEnabled: value));
+  void setNewChatMcpEnabled(bool value) =>
+      _update(state.copyWith(newChatMcpEnabled: value));
+  void setCodeThemeDark(SyntaxThemeName value) =>
+      _update(state.copyWith(codeThemeDark: value));
+  void setCodeThemeLight(SyntaxThemeName value) =>
+      _update(state.copyWith(codeThemeLight: value));
+  void setPreferredBackend(PreferredBackend value) =>
+      _update(state.copyWith(preferredBackend: value));
+  void setTtsEngine(EngineId value) =>
+      _update(state.copyWith(ttsEngine: value, ttsVoiceId: null));
+  void setTtsVoiceId(String? value) =>
+      _update(state.copyWith(ttsVoiceId: value));
+  void setTtsSpeed(double value) => _update(state.copyWith(ttsSpeed: value));
+  void setKittenTtsModelVariant(KittenTtsModelVariant value) =>
+      _update(state.copyWith(kittenTtsModelVariant: value));
+  void setAutoSpeakEnabled(bool value) =>
+      _update(state.copyWith(autoSpeakEnabled: value));
+  void setConciseVoiceResponsesEnabled(bool value) =>
+      _update(state.copyWith(conciseVoiceResponsesEnabled: value));
+  void setTtsProcessMarkdown(bool value) =>
+      _update(state.copyWith(ttsProcessMarkdown: value));
+  void setTtsSkipSeconds(int value) =>
+      _update(state.copyWith(ttsSkipSeconds: value));
+  void setSmartReplyEnabled(bool value) =>
+      _update(state.copyWith(smartReplyEnabled: value));
+  void setAiUserResponseEnabled(bool value) =>
+      _update(state.copyWith(aiUserResponseEnabled: value));
+  void setLocaleCode(String? value) =>
+      _update(state.copyWith(localeCode: value));
+  void setHuggingFaceToken(String? value) =>
+      _update(state.copyWith(huggingFaceToken: value));
+  void setUnloadModelsBeforeLoad(bool value) =>
+      _update(state.copyWith(unloadModelsBeforeLoad: value));
+  void setTempChatKeyboardIncognito(bool value) =>
+      _update(state.copyWith(tempChatKeyboardIncognito: value));
+  void setResumeLastChat(bool value) =>
+      _update(state.copyWith(resumeLastChat: value));
+  void setImageCompressionEnabled(bool value) =>
+      _update(state.copyWith(imageCompressionEnabled: value));
+  void setImageCompressionLevel(ImageCompressionLevel value) =>
+      _update(state.copyWith(imageCompressionLevel: value));
+  void setSmartRepliesUsePersona(bool value) =>
+      _update(state.copyWith(smartRepliesUsePersona: value));
+  void setKeepPersonaOnNewChat(bool value) =>
+      _update(state.copyWith(keepPersonaOnNewChat: value));
+  void setRoleSwapButtonEnabled(bool value) =>
+      _update(state.copyWith(roleSwapButtonEnabled: value));
+  void setShowPromptProcessingIndicator(bool value) =>
+      _update(state.copyWith(showPromptProcessingIndicator: value));
+  void setShowSystemMessagesInChat(bool value) =>
+      _update(state.copyWith(showSystemMessagesInChat: value));
+  void setCalendarToolsEnabled(bool value) =>
+      _update(state.copyWith(calendarToolsEnabled: value));
+  void setLocationToolsEnabled(bool value) =>
+      _update(state.copyWith(locationToolsEnabled: value));
+  void setAutoCollapseThinking(bool value) =>
+      _update(state.copyWith(autoCollapseThinking: value));
+  void setSendTemperature(bool value) =>
+      _update(state.copyWith(sendTemperature: value));
+  void setSendTopP(bool value) => _update(state.copyWith(sendTopP: value));
+  void setDefaultSystemPrompt(String value) =>
+      _update(state.copyWith(defaultSystemPrompt: value.trim()));
+
+  void addSavedMcpIntegration(McpIntegration integration) {
+    final current = List<McpIntegration>.from(state.savedMcpIntegrations);
+    final exists = current.any(
+      (i) =>
+          (integration.pluginId != null &&
+              i.pluginId == integration.pluginId) ||
+          (integration.serverUrl != null &&
+              i.serverUrl == integration.serverUrl),
+    );
+    if (!exists) {
+      current.add(integration);
+      _update(state.copyWith(savedMcpIntegrations: current));
+    }
+  }
+
+  void removeSavedMcpIntegration(int index) {
+    if (index >= 0 && index < state.savedMcpIntegrations.length) {
+      final current = List<McpIntegration>.from(state.savedMcpIntegrations)
+        ..removeAt(index);
+      _update(state.copyWith(savedMcpIntegrations: current));
+    }
+  }
+
+  void toggleSavedMcpIntegration(int index, bool enabled) {
+    if (index >= 0 && index < state.savedMcpIntegrations.length) {
+      final current = List<McpIntegration>.from(state.savedMcpIntegrations);
+      current[index] = current[index].copyWith(enabled: enabled);
+      _update(state.copyWith(savedMcpIntegrations: current));
+    }
+  }
+
+  Future<void> _update(AppSettings updated) async {
+    state = updated;
+    final prefs = ref.read(sharedPreferencesProvider);
+    // Fire-and-forget persistence: in-memory state is updated synchronously
+    // above so the UI reflects the new value immediately. The async write to
+    // SharedPreferences is not awaited by setter callers (which are sync
+    // UI handlers), so a hard app kill between the state mutation and the
+    // write completing can lose the most recent setting change. Settings
+    // are flushed on every state change and on app pause via
+    // [flushPendingSettings] in the root widget.
+    await prefs.setString('appSettings', updated.toJson());
+  }
+
+  Future<void> resetToDefaults() async {
+    state = AppSettings();
+    final prefs = ref.read(sharedPreferencesProvider);
+    await prefs.setString('appSettings', state.toJson());
+  }
+}
+
+final packageInfoProvider = FutureProvider<PackageInfo>((ref) async {
+  return PackageInfo.fromPlatform();
+});

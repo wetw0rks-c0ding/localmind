@@ -1,0 +1,3379 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:math';
+
+import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:localmind/core/logger/app_logger.dart';
+import 'package:localmind/core/models/enums.dart';
+import 'package:localmind/core/providers/app_providers.dart';
+import 'package:localmind/core/providers/review_prompt_providers.dart';
+import 'package:localmind/core/providers/service_providers.dart';
+import 'package:localmind/core/providers/chat_background_service_provider.dart';
+import 'package:localmind/core/providers/storage_providers.dart';
+import 'package:localmind/core/services/app_haptics.dart';
+import 'package:localmind/core/services/generated_image_files.dart';
+import 'package:localmind/core/services/message_save_service.dart';
+import 'package:localmind/core/storage/entities.dart';
+import 'package:localmind/features/conversations/data/models/conversation.dart';
+import 'package:localmind/features/conversations/providers/conversation_providers.dart'
+    as conv;
+import 'package:localmind/features/models/data/models/model_info.dart';
+import 'package:localmind/features/on_device/providers/on_device_providers.dart';
+import 'package:localmind/features/personas/providers/personas_providers.dart';
+import 'package:localmind/features/personas/utils/persona_prompt_utils.dart';
+import 'package:localmind/features/servers/data/models/server.dart';
+import 'package:localmind/features/servers/providers/server_providers.dart';
+import 'package:localmind/objectbox.g.dart';
+import '../data/chat_service.dart';
+import '../data/image_generation_service.dart';
+import '../data/models/message.dart' hide ToolCallData;
+import '../data/models/message.dart' as msg_model show ToolCallData;
+import '../data/title_generation_service.dart';
+import '../data/tools/tool_definition.dart';
+import '../data/tools/tool_event.dart';
+import '../data/tools/tool_execution_loop.dart';
+import '../data/tools/adapters/tool_transport_adapter.dart' show ParsedToolCall;
+import '../data/models/live_generation.dart';
+import '../utils/attachment_helpers.dart';
+import 'chat_mcp_providers.dart';
+import 'chat_origin_provider.dart';
+import 'chat_params_providers.dart';
+import 'chat_reasoning_providers.dart';
+import 'chat_service_providers.dart';
+import 'generation_session.dart';
+import 'message_selection_provider.dart';
+import 'model_selection_providers.dart';
+import 'tooling_providers.dart';
+import '../utils/message_variants.dart';
+import '../../tts/providers/tts_providers.dart';
+import '../../stt/providers/stt_providers.dart' as stt;
+import '../../voice_mode/providers/voice_mode_provider.dart';
+
+class PendingToolApproval {
+  final ParsedToolCall toolCall;
+  final Completer<bool> completer;
+
+  PendingToolApproval({required this.toolCall, required this.completer});
+}
+
+bool shouldIncludeMessageInChatContext(Message message) {
+  if (message.role == MessageRole.assistant &&
+      message.content.trim().isEmpty &&
+      (message.status == MessageStatus.error ||
+          message.attachmentPaths?.any(AttachmentHelpers.isImagePath) ==
+              true)) {
+    return false;
+  }
+  return true;
+}
+
+class ChatState {
+  final List<Message> messages;
+  final List<Message> allMessages;
+  final bool isStreaming;
+  final bool isLoading;
+  final String? errorMessage;
+  final Message? streamingMessage;
+  final PendingToolApproval? pendingToolApproval;
+  final bool isTemporary;
+
+  /// Snapshot of the reply currently in flight, or null when idle.
+  final LiveGeneration? liveGeneration;
+
+  const ChatState({
+    this.messages = const [],
+    this.allMessages = const [],
+    this.isStreaming = false,
+    this.isLoading = false,
+    this.errorMessage,
+    this.streamingMessage,
+    this.pendingToolApproval,
+    this.isTemporary = false,
+    this.liveGeneration,
+  });
+
+  ChatState copyWith({
+    List<Message>? messages,
+    List<Message>? allMessages,
+    bool? isStreaming,
+    bool? isLoading,
+    String? errorMessage,
+    Message? streamingMessage,
+    PendingToolApproval? pendingToolApproval,
+    bool? isTemporary,
+    LiveGeneration? liveGeneration,
+    bool clearError = false,
+    bool clearStreaming = false,
+    bool clearPendingApproval = false,
+    bool clearLiveGeneration = false,
+  }) {
+    return ChatState(
+      messages: messages ?? this.messages,
+      allMessages: allMessages ?? this.allMessages,
+      isStreaming: isStreaming ?? this.isStreaming,
+      isLoading: isLoading ?? this.isLoading,
+      errorMessage: clearError ? null : (errorMessage ?? this.errorMessage),
+      streamingMessage: clearStreaming
+          ? null
+          : (streamingMessage ?? this.streamingMessage),
+      pendingToolApproval: clearPendingApproval
+          ? null
+          : (pendingToolApproval ?? this.pendingToolApproval),
+      isTemporary: isTemporary ?? this.isTemporary,
+      liveGeneration: clearLiveGeneration
+          ? null
+          : (liveGeneration ?? this.liveGeneration),
+    );
+  }
+}
+
+final chatProvider = NotifierProvider<ChatNotifier, ChatState>(() {
+  return ChatNotifier();
+});
+
+class ChatNotifier extends Notifier<ChatState> {
+  MessageSaveService? _saveService;
+  PendingToolApproval? _pendingToolApproval;
+  final Set<String> _titleGenerationsInFlight = <String>{};
+  final Map<String, Future<void>> _titleGenerationFutures =
+      <String, Future<void>>{};
+  bool _pendingTemporaryChat = false;
+  String? _currentConversationId;
+  String? _ephemeralConversationId;
+  bool _attemptedResume = false;
+  static const _lastActiveConversationKey = 'lastActiveConversationId';
+  bool _useFreshConversationSystemPrompt = false;
+  bool _isRegenerating = false;
+  String? _freshConversationSystemPrompt;
+
+  /// In-flight replies keyed by conversation id (insertion order = start
+  /// order). Remote replies run concurrently, one per conversation; at most
+  /// one on-device reply exists at a time.
+  final Map<String, GenerationSession> _sessions = {};
+  bool _backgroundServiceRunning = false;
+
+  String? get _activeConversationId =>
+      _currentConversationId ?? _ephemeralConversationId;
+
+  bool get _isInMemoryChat => state.isTemporary;
+
+  /// Reply generating for the open chat, if any.
+  GenerationSession? get _activeSession {
+    final id = _activeConversationId;
+    return id == null ? null : _sessions[id];
+  }
+
+  /// Conversations other than the open chat whose reply is still generating.
+  Set<String> get generatingElsewhereIds => {
+    for (final id in _sessions.keys)
+      if (id != _activeConversationId) id,
+  };
+
+  /// Registers the reply that is about to stream into [conversationId]. A
+  /// previous session for the same chat (a tool-call follow-up) is replaced.
+  GenerationSession _beginSession(
+    String conversationId,
+    Server server,
+    ChatService chatService, {
+    bool isImageGeneration = false,
+    bool countsAsPrompt = false,
+  }) {
+    final previous = _sessions[conversationId];
+    final session = GenerationSession(
+      conversationId: conversationId,
+      server: server,
+      chatService: chatService,
+      persisted: previous?.persisted ?? !_isInMemoryChat,
+      countsAsPrompt: countsAsPrompt,
+      imageCancelToken: isImageGeneration ? CancelToken() : null,
+    );
+    _sessions[conversationId] = session;
+    if (previous != null) unawaited(previous.detach());
+    _publishGenerations();
+    return session;
+  }
+
+  /// Marks [session] finished. A session that was already replaced by a newer
+  /// one for the same chat is left alone.
+  void _endSession(GenerationSession session) {
+    session.cancelUiTimer();
+    if (identical(_sessions[session.conversationId], session)) {
+      _sessions.remove(session.conversationId);
+    }
+    _publishGenerations();
+  }
+
+  /// Pushes the running replies to the UI providers and keeps the Android
+  /// foreground service / wakelock alive until the last reply finishes.
+  void _publishGenerations() {
+    if (!ref.mounted) return;
+    ref.read(activeGenerationsProvider.notifier).set({
+      for (final s in _sessions.values)
+        s.conversationId: ActiveGeneration(
+          conversationId: s.conversationId,
+          isOnDevice: s.isOnDevice,
+        ),
+    });
+    final activeId = _activeConversationId;
+    ref
+        .read(isStreamingProvider.notifier)
+        .setStreaming(activeId != null && _sessions.containsKey(activeId));
+
+    final shouldRun = _sessions.isNotEmpty;
+    if (shouldRun != _backgroundServiceRunning) {
+      _backgroundServiceRunning = shouldRun;
+      final service = ref.read(chatBackgroundServiceProvider);
+      unawaited(shouldRun ? service.start() : service.stop());
+    }
+  }
+
+  /// Moves the live status from "reading the prompt" to "generating" the first
+  /// time the backend yields a token for [session].
+  void _markFirstToken(GenerationSession session) {
+    if (_activeConversationId != session.conversationId) return;
+    final current = state.liveGeneration;
+    if (current == null) return;
+    state = state.copyWith(
+      liveGeneration: current.copyWith(
+        phase: LiveGenerationPhase.generating,
+        firstTokenAt: DateTime.now(),
+      ),
+    );
+  }
+
+  /// Freezes the final throughput numbers on the status bar once [session]
+  /// produced [finalMessage].
+  void _completeLiveGeneration(
+    GenerationSession session,
+    Message finalMessage,
+  ) {
+    if (_activeConversationId != session.conversationId) return;
+    final current = state.liveGeneration;
+    if (current == null) return;
+    final stats = session.stats;
+    final genMs = session.startTime == null
+        ? null
+        : DateTime.now().difference(session.startTime!).inMilliseconds;
+    double? tps = stats?.tokensPerSecond;
+    final outTokens = stats?.totalOutputTokens ?? finalMessage.tokenCount;
+    if (tps == null && outTokens != null && genMs != null && genMs > 0) {
+      tps = outTokens / (genMs / 1000);
+    }
+    state = state.copyWith(
+      liveGeneration: current.copyWith(
+        phase: LiveGenerationPhase.completed,
+        completedAt: DateTime.now(),
+        outputTokens: outTokens,
+        tokensPerSecond: tps,
+        generationTimeMs: genMs,
+      ),
+    );
+  }
+
+  /// Counts one prompt against the conversation's usage, once per session.
+  /// AI-authored turns (title generation, smart replies) pass
+  /// `countsAsPrompt: false` so they do not inflate the user's count.
+  Future<void> _maybeCountPrompt(
+    GenerationSession session,
+    String conversationId,
+  ) async {
+    if (!session.countsAsPrompt ||
+        !session.persisted ||
+        session.promptCounted) {
+      return;
+    }
+    session.promptCounted = true;
+    if (!ref.mounted) return;
+    await ref
+        .read(conv.conversationsProvider.notifier)
+        .incrementPromptsProcessed(conversationId);
+  }
+
+  /// Tools offered to the model this turn. Waits briefly for MCP servers that
+  /// are still connecting (e.g. right after launch) so their tools are not
+  /// silently missing from the first message.
+  Future<List<ToolDefinition>> _toolsForTurn(bool mcpEnabled) async {
+    if (!mcpEnabled) return const [];
+    await ref
+        .read(chatMcpConfigProvider.notifier)
+        .connectionsReady
+        .timeout(const Duration(seconds: 10), onTimeout: () {});
+    if (!ref.mounted) return const [];
+    return ref.read(toolRegistryProvider).listTools();
+  }
+
+  /// Whether the open chat's reply may keep streaming after the user leaves
+  /// it. Temporary chats aren't persisted, tool approvals need the chat on
+  /// screen, and voice mode drives its own turn-taking.
+  bool _canContinueInBackground() {
+    if (!state.isStreaming || _isInMemoryChat) return false;
+    if (_activeSession == null) return false;
+    if (_activeSession!.isImageGeneration) return true;
+    if (_pendingToolApproval != null) return false;
+    if (ref.read(chatMcpConfigProvider).enabled) return false;
+    return ref.read(voiceModeProvider).phase == VoiceModePhase.idle;
+  }
+
+  /// The on-device engine serves one reply at a time. Returns true (and
+  /// explains why) when the active server is on-device and another chat's
+  /// on-device reply is still running. Remote servers are never blocked.
+  bool _blockIfOnDeviceBusy() {
+    final server = ref.read(activeChatTargetProvider).server;
+    if (server == null || !server.isOnDevice) return false;
+    final busy = _sessions.values.any(
+      (s) => s.isOnDevice && s.conversationId != _activeConversationId,
+    );
+    if (!busy) return false;
+    state = state.copyWith(errorMessage: onDeviceBusyMessage);
+    return true;
+  }
+
+  /// Cancels the reply generating for [conversationId], if any. Used before
+  /// deleting a conversation that may be streaming in the background.
+  Future<void> cancelGenerationFor(String conversationId) async {
+    final session = _sessions[conversationId];
+    if (session == null) return;
+    await session.detach();
+    if (!ref.mounted) return;
+    session.chatService.cancelStream();
+    session.latestMessage = null;
+    _endSession(session);
+    if (_activeConversationId == conversationId) {
+      state = state.copyWith(isStreaming: false, clearStreaming: true);
+    }
+  }
+
+  /// Cancels every running reply (for example before wiping all chats).
+  Future<void> cancelAllGenerations() async {
+    for (final id in _sessions.keys.toList()) {
+      await cancelGenerationFor(id);
+    }
+  }
+
+  Message _finalizeStreamMessage(
+    Message msg, {
+    String? stopReason,
+    GenerationSession? session,
+  }) {
+    final effectiveStats = session?.stats;
+    final effectiveStart = session?.startTime;
+    final effectiveFirstToken = session?.firstTokenTime;
+    final now = DateTime.now();
+
+    int? ttftMs;
+    if (effectiveFirstToken != null && effectiveStart != null) {
+      ttftMs = effectiveFirstToken.difference(effectiveStart).inMilliseconds;
+    } else if (effectiveStats?.timeToFirstTokenSeconds != null) {
+      ttftMs = (effectiveStats!.timeToFirstTokenSeconds! * 1000).round();
+    }
+
+    int? genMs;
+    if (effectiveStart != null) {
+      genMs = now.difference(effectiveStart).inMilliseconds;
+    }
+
+    double? tps = effectiveStats?.tokensPerSecond;
+    final outputTokens = effectiveStats?.totalOutputTokens;
+    if (tps == null && outputTokens != null && genMs != null && genMs > 0) {
+      tps = outputTokens / (genMs / 1000);
+    }
+
+    return msg.copyWith(
+      tokenCount: outputTokens ?? msg.tokenCount,
+      inputTokenCount: effectiveStats?.inputTokens ?? msg.inputTokenCount,
+      tokensPerSecond: tps ?? msg.tokensPerSecond,
+      generationTimeMs: genMs ?? msg.generationTimeMs,
+      ttftMs: ttftMs ?? msg.ttftMs,
+      stopReason: stopReason ?? msg.stopReason,
+    );
+  }
+
+  /// Updates the conversation's total token count from the most recent
+  /// assistant message's own end-of-stream stats (`inputTokenCount` +
+  /// `tokenCount`, populated from the server's real usage/stats payload) —
+  /// this is exactly the size of the context window the model saw on its
+  /// last turn, so it doubles as an accurate "context used" figure without
+  /// ever issuing an extra request just to count tokens.
+  void _recomputeConversationTotal(
+    String conversationId, {
+    List<Message>? messages,
+  }) {
+    final timeline = messages ?? state.messages;
+    final lastWithStats = timeline.reversed
+        .where(
+          (m) =>
+              m.role == MessageRole.assistant &&
+              (m.inputTokenCount != null || m.tokenCount != null),
+        )
+        .firstOrNull;
+    final total = lastWithStats == null
+        ? 0
+        : (lastWithStats.inputTokenCount ?? 0) +
+              (lastWithStats.tokenCount ?? 0);
+    unawaited(
+      ref
+          .read(conv.conversationsProvider.notifier)
+          .updateTokenCount(conversationId, total),
+    );
+  }
+
+  /// Syncs the history-list preview/message-count/char-count/token-total
+  /// for [conversationId] after a generation finishes. Generation runs in
+  /// the background even after the user switches to a different
+  /// conversation, so this must never assume `state.messages` belongs to
+  /// [conversationId] — when it isn't the conversation currently on screen,
+  /// the active timeline is re-read from the database instead. Without
+  /// this, a background reply could overwrite the *foreground* conversation's
+  /// history preview with its own content.
+  Future<void> _syncConversationStatsAfterGeneration(
+    String conversationId,
+    Message finalMessage, {
+    required bool isCurrentContext,
+    String? imagePrompt,
+  }) async {
+    if (!ref.mounted) return;
+    final timeline = isCurrentContext
+        ? state.messages
+        : MessageVariants.resolveActiveTimeline(
+            await loadConversationMessages(conversationId),
+          );
+
+    if (!ref.mounted) return;
+    final previewText = imagePrompt ?? finalMessage.content;
+    final preview = previewText.length > 100
+        ? '${previewText.substring(0, 100)}...'
+        : previewText;
+    final totalChars = timeline.fold<int>(
+      0,
+      (sum, message) => sum + message.content.length,
+    );
+
+    await ref
+        .read(conv.conversationsProvider.notifier)
+        .syncConversationStats(
+          conversationId,
+          messageCount: timeline.length,
+          characterCount: totalChars,
+          preview: preview,
+        );
+    if (!ref.mounted) return;
+    _recomputeConversationTotal(conversationId, messages: timeline);
+
+    final lastUserMessage = timeline
+        .where((m) => m.role == MessageRole.user)
+        .firstOrNull;
+    if (lastUserMessage != null && imagePrompt == null) {
+      // Also covers a first reply that finished in the background (#94).
+      _maybeAutoGenerateTitleAfterFirstReply(
+        conversationId: conversationId,
+        timeline: timeline,
+      );
+    }
+  }
+
+  void approveTool(bool approved) {
+    final pending = _pendingToolApproval;
+    if (pending != null && !pending.completer.isCompleted) {
+      pending.completer.complete(approved);
+    }
+  }
+
+  void _clearPendingApproval() {
+    final pending = _pendingToolApproval;
+    _pendingToolApproval = null;
+    if (pending != null) {
+      if (!pending.completer.isCompleted) {
+        pending.completer.complete(false);
+      }
+      if (ref.mounted) {
+        state = state.copyWith(clearPendingApproval: true);
+      }
+    }
+  }
+
+  @override
+  ChatState build() {
+    final db = ref.read(databaseProvider);
+    _saveService = MessageSaveService(db);
+    ref.onDispose(() {
+      for (final session in _sessions.values) {
+        session.cancelled = true;
+        session.imageCancelToken?.cancel();
+        session.cancelUiTimer();
+        session.subscription?.cancel();
+        session.subscription = null;
+      }
+      _sessions.clear();
+      _saveService?.dispose();
+      final pending = _pendingToolApproval;
+      _pendingToolApproval = null;
+      if (pending != null && !pending.completer.isCompleted) {
+        pending.completer.complete(false);
+      }
+    });
+    if (!_attemptedResume) {
+      _attemptedResume = true;
+      Future.microtask(_tryResumeLastChat);
+    }
+    return const ChatState();
+  }
+
+  Future<void> _tryResumeLastChat() async {
+    if (!ref.mounted) return;
+    final settings = ref.read(settingsProvider);
+    if (!settings.resumeLastChat) return;
+    if (state.messages.isNotEmpty || _currentConversationId != null) return;
+
+    final prefs = ref.read(sharedPreferencesProvider);
+    final lastId = prefs.getString(_lastActiveConversationKey);
+    if (lastId == null || lastId.isEmpty) return;
+
+    try {
+      final conversations = await ref.read(conv.conversationsProvider.future);
+      if (!ref.mounted) return;
+      Conversation? target;
+      for (final conversation in conversations) {
+        if (conversation.id == lastId && !conversation.isTemporary) {
+          target = conversation;
+          break;
+        }
+      }
+      if (target != null) {
+        await loadConversation(target);
+      }
+    } catch (e, st) {
+      Log.error('Failed to resume last chat: $e\n$st');
+    }
+  }
+
+  void _persistLastActiveConversation(String conversationId) {
+    if (!ref.mounted) return;
+    if (!ref.read(settingsProvider).resumeLastChat) return;
+    ref
+        .read(sharedPreferencesProvider)
+        .setString(_lastActiveConversationKey, conversationId);
+  }
+
+  Future<void> loadConversation(Conversation conversation) async {
+    if (!ref.mounted) return;
+    // Leave an eligible reply streaming in the background (#94). Only the
+    // open chat's own stream may be cancelled here; a reply already running
+    // in the background for another chat must survive further switches.
+    if (state.isStreaming && !_canContinueInBackground()) {
+      await cancelStream();
+    } else if (!state.isStreaming) {
+      _clearPendingApproval();
+    }
+    if (!ref.mounted) return;
+    _currentConversationId = conversation.id;
+    ref.read(smartReplyServiceProvider).reset();
+    state = state.copyWith(
+      isLoading: true,
+      errorMessage: null,
+      clearError: true,
+      clearLiveGeneration: true,
+    );
+
+    try {
+      final imageSession = _sessions[conversation.id];
+      var messages = await loadConversationMessages(conversation.id);
+      if (!ref.mounted || _currentConversationId != conversation.id) return;
+      if (imageSession?.isImageGeneration == true &&
+          !identical(_sessions[conversation.id], imageSession)) {
+        // The read may have started before the image transaction committed.
+        messages = await loadConversationMessages(conversation.id);
+        if (!ref.mounted || _currentConversationId != conversation.id) return;
+      }
+
+      // Reattach to a reply that kept generating while this chat was closed.
+      final liveMessage = _sessions[conversation.id]?.latestMessage;
+      state = ChatState(
+        allMessages: messages,
+        messages: MessageVariants.resolveActiveTimeline(messages),
+        isLoading: false,
+        isTemporary: conversation.isTemporary,
+        isStreaming: liveMessage != null,
+        streamingMessage: liveMessage,
+      );
+      ref
+          .read(conv.activeConversationIdProvider.notifier)
+          .setActiveConversation(conversation);
+      _publishGenerations();
+
+      if (!conversation.isTemporary) {
+        _persistLastActiveConversation(conversation.id);
+      }
+
+      ref
+          .read(chatMcpConfigProvider.notifier)
+          .setEnabled(conversation.mcpEnabled ?? false);
+    } catch (e, stackTrace) {
+      Log.fatal(error: e, stackTrace: stackTrace);
+      if (ref.mounted) {
+        state = state.copyWith(
+          isLoading: false,
+          errorMessage: 'Failed to load conversation: $e',
+          clearLiveGeneration: true,
+        );
+      }
+    }
+  }
+
+  static List<Message> _loadMessagesInBackground(
+    Store store,
+    String conversationId,
+  ) {
+    final convBox = store.box<ConversationEntity>();
+    final messageBox = store.box<MessageEntity>();
+
+    final convQuery = convBox
+        .query(ConversationEntity_.id.equals(conversationId))
+        .build();
+    final convEntity = convQuery.findFirst();
+    convQuery.close();
+
+    List<Message> messages = [];
+
+    if (convEntity != null) {
+      final relatedEntities = convEntity.messages;
+      if (relatedEntities.isNotEmpty) {
+        messages = relatedEntities.map((e) => e.toDomain()).toList();
+      } else {
+        final query = messageBox
+            .query(MessageEntity_.conversationUid.equals(conversationId))
+            .build();
+        final manualEntities = query.find();
+        query.close();
+
+        if (manualEntities.isNotEmpty) {
+          for (final e in manualEntities) {
+            e.conversation.target = convEntity;
+            messageBox.put(e);
+          }
+          messages = manualEntities.map((e) => e.toDomain()).toList();
+        }
+      }
+    } else {
+      final query = messageBox
+          .query(MessageEntity_.conversationUid.equals(conversationId))
+          .build();
+      final entities = query.find();
+      query.close();
+      messages = entities.map((e) => e.toDomain()).toList();
+    }
+
+    messages.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    final normalized = messages.asMap().entries.map((entry) {
+      final msg = entry.value;
+      if (msg.variantGroupId?.isNotEmpty == true) return msg;
+      return msg.copyWith(
+        variantGroupId: msg.id,
+        variantIndex: 0,
+        threadOrder: entry.key,
+        isActiveVariant: true,
+      );
+    }).toList();
+    return MessageVariants.ensureParentLinks(normalized);
+  }
+
+  void _setAllMessages(List<Message> allMessages) {
+    state = state.copyWith(
+      allMessages: allMessages,
+      messages: MessageVariants.resolveActiveTimeline(allMessages),
+    );
+  }
+
+  Future<void> startNewConversation() async {
+    if (!ref.mounted) return;
+    if (state.isStreaming && !_canContinueInBackground()) {
+      await _abortStreamImmediately();
+    } else {
+      _clearPendingApproval();
+    }
+    if (!ref.mounted) return;
+
+    _currentConversationId = null;
+    _ephemeralConversationId = null;
+    _pendingTemporaryChat = false;
+    ref.read(smartReplyServiceProvider).reset();
+    state = const ChatState();
+    ref
+        .read(conv.activeConversationIdProvider.notifier)
+        .setActiveConversation(null);
+    _publishGenerations();
+    ref.read(chatOriginProvider.notifier).clear();
+    ref.read(messageSelectionModeProvider.notifier).disable();
+
+    final settings = ref.read(settingsProvider);
+    ref
+        .read(chatMcpConfigProvider.notifier)
+        .setEnabled(settings.mcpEnabled && settings.newChatMcpEnabled);
+  }
+
+  /// Cancels the open chat's reply right away (before another one starts or
+  /// the chat is left) and marks its in-memory message cancelled. Replies
+  /// running for other chats are never touched.
+  Future<void> _abortStreamImmediately() async {
+    final session = _activeSession;
+    _clearPendingApproval();
+    if (session == null && state.streamingMessage == null) return;
+    await session?.detach();
+    if (!ref.mounted) return;
+
+    session?.chatService.cancelStream();
+    if (session != null) _endSession(session);
+
+    final convId = _currentConversationId;
+    final streamingMessage = session?.latestMessage ?? state.streamingMessage;
+    session?.latestMessage = null;
+
+    if (streamingMessage != null && convId != null) {
+      // Mark the in-memory copy as cancelled and inactive so it does not stay
+      // visible in the active timeline while the next stream starts.
+      final cancelled = streamingMessage.copyWith(
+        conversationId: convId,
+        status: MessageStatus.cancelled,
+        isProcessing: false,
+        isActiveVariant: false,
+      );
+      final updatedAll = state.allMessages.map((m) {
+        return m.id == cancelled.id ? cancelled : m;
+      }).toList();
+      state = state.copyWith(
+        allMessages: updatedAll,
+        messages: MessageVariants.resolveActiveTimeline(updatedAll),
+      );
+
+      unawaited(
+        _persistCancelledMessageInBackground(
+          streamingMessage,
+          convId,
+          session: session,
+        ),
+      );
+    }
+  }
+
+  Future<void> _persistCancelledMessageInBackground(
+    Message streamingMessage,
+    String conversationId, {
+    GenerationSession? session,
+  }) async {
+    try {
+      final finalMessage = _finalizeStreamMessage(
+        streamingMessage.copyWith(
+          conversationId: conversationId,
+          status: MessageStatus.cancelled,
+          isProcessing: false,
+        ),
+        stopReason: 'cancelled',
+        session: session,
+      );
+      await _saveService?.flush();
+      await _saveMessage(finalMessage, persist: session?.persisted);
+    } catch (e) {
+      Log.error('Failed to persist cancelled stream message: $e');
+    }
+  }
+
+  void setTemporaryMode(bool enabled) {
+    if (state.messages.isNotEmpty && enabled != state.isTemporary) return;
+    _pendingTemporaryChat = enabled;
+    state = state.copyWith(isTemporary: enabled);
+  }
+
+  String generateUuid() {
+    final random = Random.secure();
+    final bytes = List<int>.generate(16, (_) => random.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    return [
+          bytes.sublist(0, 4),
+          bytes.sublist(4, 6),
+          bytes.sublist(6, 8),
+          bytes.sublist(8, 10),
+          bytes.sublist(10, 16),
+        ]
+        .map((b) => b.map((e) => e.toRadixString(16).padLeft(2, '0')).join())
+        .join('-');
+  }
+
+  /// Writes the latest snapshot of every persisted running reply to disk, so
+  /// nothing is lost if the app is killed while it is in the background.
+  Future<void> checkpointStreamingMessage({bool flush = false}) async {
+    for (final session in _sessions.values) {
+      final latest = session.latestMessage;
+      if (!session.persisted || session.isImageGeneration || latest == null) {
+        continue;
+      }
+      _saveService?.enqueue(latest);
+      session.updateSavedMetrics(latest);
+      session.resetCheckpointMetrics();
+    }
+
+    if (flush) {
+      await _saveService?.flush();
+    }
+  }
+
+  void _replaceMessageInState(Message message, {bool clearStreaming = false}) {
+    _replaceMessageInAll(message, clearStreaming: clearStreaming);
+  }
+
+  /// Creates a new conversation (or ephemeral in-memory chat) if one isn't
+  /// already active, mirroring the same persona/title/MCP setup [sendMessage]
+  /// has always done on the first message of a chat. Shared with
+  /// [insertMessageWithoutGenerating] so manually-inserted messages can also
+  /// start a brand new conversation.
+  Future<void> _ensureConversationExists(
+    String titleSource, {
+    ActiveChatTarget? sendTarget,
+  }) async {
+    if (_currentConversationId != null || _ephemeralConversationId != null) {
+      return;
+    }
+
+    final ActiveChatTarget target =
+        sendTarget ?? ref.read(activeChatTargetProvider);
+    final server = target.server;
+    final settings = ref.read(settingsProvider);
+    if (server == null) return;
+
+    final isTemp = state.isTemporary || _pendingTemporaryChat;
+    if (isTemp) {
+      _ephemeralConversationId = generateUuid();
+      _pendingTemporaryChat = false;
+      state = state.copyWith(isTemporary: true);
+      return;
+    }
+
+    final titleService = ref.read(titleGenerationServiceProvider);
+    final initialTitle = settings.autoGenerateTitle && !target.isImageGeneration
+        ? 'New Chat'
+        : titleService.truncateFirstMessageTitle(titleSource);
+    final preselected = ref.read(selectedPersonasProvider);
+    final newConversationSystemPrompt = preselected.isEmpty
+        ? null
+        : PersonaPromptUtils.combineSystemPrompts(preselected);
+    final conversation = await ref
+        .read(conv.conversationsProvider.notifier)
+        .createConversation(
+          title: initialTitle,
+          serverId: server.id,
+          modelId: target.effectiveModelId,
+          personaId: preselected.isEmpty
+              ? null
+              : PersonaPromptUtils.joinPersonaIds(
+                  preselected.map((p) => p.id).toList(),
+                ),
+          systemPrompt: newConversationSystemPrompt,
+          mcpEnabled: settings.mcpEnabled && settings.newChatMcpEnabled,
+          isTemporary: false,
+          folderId: ref.read(pendingNewChatFolderIdProvider.notifier).consume(),
+        );
+    if (!ref.mounted) return;
+    _currentConversationId = conversation.id;
+    ref
+        .read(conv.activeConversationIdProvider.notifier)
+        .setActiveConversation(conversation);
+    _persistLastActiveConversation(conversation.id);
+    // A conversationsProvider refresh triggered later in this same send
+    // (e.g. syncConversationStats) rebuilds activeConversationProvider
+    // from the reloaded list; use this captured value for this send so
+    // the persona system prompt is never missed on the very first
+    // message of a brand new conversation.
+    _useFreshConversationSystemPrompt = true;
+    _freshConversationSystemPrompt = newConversationSystemPrompt;
+
+    ref
+        .read(chatMcpConfigProvider.notifier)
+        .setEnabled(settings.mcpEnabled && settings.newChatMcpEnabled);
+
+    if (!settings.keepPersonaOnNewChat) {
+      ref.read(selectedPersonasProvider.notifier).clear();
+    }
+  }
+
+  bool _canGenerateImage(String prompt, {required bool hasAttachments}) {
+    return !_isInMemoryChat &&
+        !_pendingTemporaryChat &&
+        !hasAttachments &&
+        prompt.trim().isNotEmpty;
+  }
+
+  Future<void> _runImageGeneration(
+    GenerationSession session,
+    Message assistant,
+    String modelId,
+    String prompt, {
+    Message? newUser,
+  }) async {
+    if (session.cancelled) return;
+    session.resetStreamMetrics();
+    final pending = assistant.copyWith(isProcessing: true);
+    session.latestMessage = pending;
+    state = state.copyWith(streamingMessage: pending);
+    File? file;
+    var started = false;
+    var committed = false;
+    var failure = ImageGenerationFailure.saveFailed;
+    var finalMessage = assistant;
+    try {
+      persistImageTurn(assistant, user: newUser);
+      started = true;
+      failure = ImageGenerationFailure.failed;
+      final server = session.server;
+      final endpoint = server.imageGenerationEndpoint;
+      if (endpoint == null) throw ImageGenerationFailure.unavailable;
+      final image = await ref
+          .read(imageGenerationServiceProvider)
+          .generate(
+            endpoint: Uri.parse(endpoint),
+            authHeaders: server.authHeaders,
+            allowsUrlResults: server.type == ServerType.openAICompatible,
+            modelId: modelId,
+            prompt: prompt.trim(),
+            cancelToken: session.imageCancelToken!,
+          );
+      if (!ref.mounted || session.cancelled) return;
+      failure = ImageGenerationFailure.saveFailed;
+      final directory = await ref.read(storageDirectoryProvider.future);
+      file = await GeneratedImageFiles(directory).write(
+        messageId: assistant.id,
+        bytes: image.bytes,
+        extension: image.extension,
+        isCancelled: () => session.cancelled || !ref.mounted,
+      );
+      if (file == null || !ref.mounted || session.cancelled) return;
+      finalMessage = _finalizeStreamMessage(
+        assistant.copyWith(
+          status: MessageStatus.complete,
+          attachmentPaths: [file.path],
+          isProcessing: false,
+        ),
+        session: session,
+      );
+      // Commit without yielding so Stop or Delete cannot race the transition
+      // between the finalized file and the message that owns it.
+      persistImageTurn(finalMessage);
+      committed = true;
+    } catch (error) {
+      if (!ref.mounted || session.cancelled) return;
+      if (error is ImageGenerationFailure) failure = error;
+      finalMessage = assistant.copyWith(
+        status: MessageStatus.error,
+        isProcessing: false,
+        errorMessage: failure.code,
+      );
+      if (started) {
+        try {
+          persistImageTurn(finalMessage);
+        } catch (_) {
+          Log.warning('Could not persist the image generation error');
+        }
+      }
+    } finally {
+      if (ref.mounted && !session.cancelled) {
+        final isCurrent =
+            _activeConversationId == session.conversationId && !state.isLoading;
+        if (isCurrent) {
+          _replaceMessageInState(finalMessage, clearStreaming: true);
+          state = state.copyWith(isStreaming: false);
+        }
+        session.latestMessage = null;
+        _endSession(session);
+      }
+      if (file != null && !committed) await GeneratedImageFiles.discard(file);
+    }
+
+    if (ref.mounted && !session.cancelled) {
+      try {
+        await _syncConversationStatsAfterGeneration(
+          session.conversationId,
+          finalMessage,
+          isCurrentContext:
+              _activeConversationId == session.conversationId &&
+              !state.isLoading,
+          imagePrompt: prompt,
+        );
+      } catch (_) {
+        Log.warning('Could not update image conversation stats');
+      }
+    }
+  }
+
+  /// Writes an image reply and, for a new turn, its prompt in one transaction.
+  @protected
+  @visibleForTesting
+  void persistImageTurn(Message message, {Message? user}) {
+    final store = ref.read(databaseProvider).store;
+    store.runInTransaction(TxMode.write, () {
+      if (user != null) _saveMessageInBackground(store, user);
+      _saveMessageInBackground(store, message);
+    });
+  }
+
+  Future<void> sendMessage(
+    String content, {
+    List<File>? attachments,
+    bool countsAsPrompt = true,
+  }) async {
+    if (_blockIfOnDeviceBusy()) return;
+    final target = ref.read(activeChatTargetProvider);
+    final server = target.server;
+    final selectedModel = target.selectedModel;
+    final effectiveModelId = target.effectiveModelId;
+
+    if (server == null) {
+      state = state.copyWith(errorMessage: 'No server connected');
+      return;
+    }
+
+    if (effectiveModelId == null) {
+      state = state.copyWith(errorMessage: modelSelectionRequiredMessage);
+      return;
+    }
+
+    if (content.trim().isEmpty &&
+        (attachments == null || attachments.isEmpty)) {
+      return;
+    }
+
+    if (target.isImageGeneration &&
+        !_canGenerateImage(
+          content,
+          hasAttachments: attachments?.isNotEmpty == true,
+        )) {
+      return;
+    }
+
+    final chatService = ref.read(chatServiceFactoryProvider)(server);
+    if (chatService == null) {
+      state = state.copyWith(errorMessage: 'No chat service available');
+      return;
+    }
+
+    await _abortStreamImmediately();
+    if (!ref.mounted) return;
+
+    // Stop the STT listener so the mic doesn't stay red while the model
+    // thinks. The chat input bar's `ref.listen` will re-start it once TTS
+    // (if any) finishes.
+    try {
+      ref.read(stt.sttProvider.notifier).stopListening();
+    } catch (_) {
+      // STT may not be initialised — non-fatal.
+    }
+
+    final trimmedContent = content.trim();
+
+    final titleSource = trimmedContent.isNotEmpty
+        ? trimmedContent
+        : (attachments?.isNotEmpty == true
+              ? attachments!.first.path.split(Platform.pathSeparator).last
+              : 'New Chat');
+    await _ensureConversationExists(titleSource, sendTarget: target);
+    if (!ref.mounted) return;
+    if (target.isImageGeneration && _isInMemoryChat) return;
+
+    final convId = _activeConversationId;
+    if (convId == null) return;
+
+    final List<String> savedPaths = [];
+    if (attachments != null && attachments.isNotEmpty) {
+      final appDir = await ref.read(storageDirectoryProvider.future);
+      final attachmentsDir = Directory('${appDir.path}/attachments');
+      if (!await attachmentsDir.exists()) {
+        await attachmentsDir.create(recursive: true);
+      }
+
+      for (final file in attachments) {
+        final savedPath = await AttachmentHelpers.saveAttachment(
+          file,
+          attachmentsDir,
+        );
+        if (savedPath != null) savedPaths.add(savedPath);
+      }
+    }
+
+    final userThreadOrder = MessageVariants.nextThreadOrder(state.messages);
+    final userGroupId = generateUuid();
+    final assistantThreadOrder = userThreadOrder + 1;
+    final assistantGroupId = generateUuid();
+    final lastInTimeline = state.messages.isNotEmpty
+        ? state.messages.last
+        : null;
+
+    final userMessage = Message(
+      id: generateUuid(),
+      conversationId: convId,
+      role: MessageRole.user,
+      content: trimmedContent,
+      createdAt: DateTime.now(),
+      status: MessageStatus.complete,
+      attachmentPaths: savedPaths.isNotEmpty ? savedPaths : null,
+      variantGroupId: userGroupId,
+      variantIndex: 0,
+      threadOrder: userThreadOrder,
+      isActiveVariant: true,
+      parentMessageId: lastInTimeline?.id,
+    );
+
+    final assistantMessageId = generateUuid();
+    var assistantMessage = Message(
+      id: assistantMessageId,
+      conversationId: convId,
+      role: MessageRole.assistant,
+      content: '',
+      createdAt: DateTime.now(),
+      status: MessageStatus.streaming,
+      modelId: effectiveModelId,
+      variantGroupId: assistantGroupId,
+      variantIndex: 0,
+      threadOrder: assistantThreadOrder,
+      isActiveVariant: true,
+      parentMessageId: userMessage.id,
+    );
+
+    final updatedAll = [...state.allMessages, userMessage, assistantMessage];
+    state = state.copyWith(
+      allMessages: updatedAll,
+      messages: MessageVariants.resolveActiveTimeline(updatedAll),
+      isStreaming: true,
+      streamingMessage: assistantMessage,
+      clearError: true,
+    );
+    final session = _beginSession(
+      convId,
+      server,
+      chatService,
+      isImageGeneration: target.isImageGeneration,
+      countsAsPrompt: countsAsPrompt && !target.isImageGeneration,
+    );
+    if (session.isImageGeneration) {
+      unawaited(
+        _runImageGeneration(
+          session,
+          assistantMessage,
+          effectiveModelId,
+          trimmedContent,
+          newUser: userMessage,
+        ),
+      );
+      return;
+    }
+
+    // Read after the conversation (and its persona system prompt) is
+    // created above — chatParamsProvider derives systemPrompt from
+    // activeConversationProvider, which doesn't have it yet if read at the
+    // top of this function, causing the very first message's request to
+    // go out with no persona system prompt.
+    final chatParams = ref.read(chatParamsProvider);
+
+    await _saveMessage(userMessage, persist: session.persisted);
+    await _saveMessage(assistantMessage, persist: session.persisted);
+
+    if (!ref.mounted) return;
+
+    if (!_isInMemoryChat && _currentConversationId != null) {
+      final preview = trimmedContent.isNotEmpty
+          ? (trimmedContent.length > 100
+                ? '${trimmedContent.substring(0, 100)}...'
+                : trimmedContent)
+          : (attachments?.isNotEmpty == true ? '[attachment]' : 'New message');
+      final timeline = [...state.messages, userMessage];
+      await ref
+          .read(conv.conversationsProvider.notifier)
+          .syncConversationStats(
+            _currentConversationId!,
+            messageCount: timeline.length,
+            characterCount: timeline.fold<int>(
+              0,
+              (sum, message) => sum + message.content.length,
+            ),
+            preview: preview,
+          );
+    }
+
+    session.resetStreamMetrics();
+    session.resetCheckpointMetrics();
+    session.updateSavedMetrics(assistantMessage);
+
+    final messagesForApi = _buildMessagesForApi(selectedModel);
+
+    final estimatedPrefillMs = PrefillEstimator.estimatePrefillMs(
+      inputChars: messagesForApi.fold<int>(0, (s, m) => s + m.content.length),
+      isOnDevice: server.isOnDevice,
+    );
+    if (_activeConversationId == convId) {
+      state = state.copyWith(
+        liveGeneration: LiveGeneration(
+          phase: LiveGenerationPhase.processingPrompt,
+          startedAt: DateTime.now(),
+          estimatedPrefillMs: estimatedPrefillMs,
+        ),
+      );
+    }
+
+    try {
+      String reasoningContent = '';
+      var streamingAssistantMessage = assistantMessage;
+      session.latestMessage = streamingAssistantMessage;
+
+      if (!session.cancelled) {
+        final mcpConfig = ref.read(chatMcpConfigProvider);
+        final activeIntegrations = mcpConfig.integrations
+            .where((i) => i.enabled)
+            .toList();
+        final integrations = mcpConfig.enabled && activeIntegrations.isNotEmpty
+            ? activeIntegrations
+            : null;
+
+        final tools = await _toolsForTurn(mcpConfig.enabled);
+        if (!ref.mounted || session.cancelled) return;
+
+        final collectedToolCalls = <ToolCallData>[];
+
+        bool stateNeedsUpdate = false;
+        bool streamHadError = false;
+
+        void updateUiState() {
+          if (!stateNeedsUpdate || !ref.mounted) return;
+          stateNeedsUpdate = false;
+
+          final streamConvId = assistantMessage.conversationId;
+          final isCurrentContext = _currentConversationId == streamConvId;
+
+          if (isCurrentContext) {
+            state = state.copyWith(streamingMessage: streamingAssistantMessage);
+          }
+        }
+
+        session.uiUpdateTimer = Timer.periodic(
+          const Duration(milliseconds: 80),
+          (_) {
+            updateUiState();
+          },
+        );
+
+        session.subscription = chatService
+            .sendMessage(
+              server: server,
+              modelId: effectiveModelId,
+              messages: messagesForApi,
+              params: chatParams,
+              integrations: integrations,
+              tools: tools,
+            )
+            .listen(
+              (response) async {
+                if (session.cancelled || !ref.mounted) {
+                  return;
+                }
+                final streamConvId = assistantMessage.conversationId;
+                final isCurrentContext = _currentConversationId == streamConvId;
+
+                switch (response.type) {
+                  case ChatResponseType.message:
+                    if (response.content?.isNotEmpty ?? false) {
+                      if (session.noteFirstToken()) _markFirstToken(session);
+                    }
+                    streamingAssistantMessage = streamingAssistantMessage
+                        .copyWith(
+                          content:
+                              streamingAssistantMessage.content +
+                              (response.content ?? ''),
+                          isProcessing: false,
+                        );
+                    session.latestMessage = streamingAssistantMessage;
+
+                    session.chunkCount++;
+
+                    if (session.persisted &&
+                        session.shouldCheckpointSave(
+                          streamingAssistantMessage,
+                        )) {
+                      _saveService?.enqueue(streamingAssistantMessage);
+                      session.updateSavedMetrics(streamingAssistantMessage);
+                      session.resetCheckpointMetrics();
+                    }
+
+                    stateNeedsUpdate = true;
+                    break;
+                  case ChatResponseType.reasoning:
+                    if (response.reasoningContent?.isNotEmpty ?? false) {
+                      if (session.noteFirstToken()) _markFirstToken(session);
+                    }
+                    reasoningContent += response.reasoningContent ?? '';
+                    streamingAssistantMessage = streamingAssistantMessage
+                        .copyWith(
+                          reasoningContent: reasoningContent,
+                          isProcessing: false,
+                        );
+                    session.latestMessage = streamingAssistantMessage;
+
+                    session.chunkCount++;
+
+                    if (session.persisted &&
+                        session.shouldCheckpointSave(
+                          streamingAssistantMessage,
+                        )) {
+                      _saveService?.enqueue(streamingAssistantMessage);
+                      session.updateSavedMetrics(streamingAssistantMessage);
+                      session.resetCheckpointMetrics();
+                    }
+
+                    stateNeedsUpdate = true;
+                    break;
+                  case ChatResponseType.processing:
+                    final wasProcessing =
+                        streamingAssistantMessage.isProcessing;
+                    streamingAssistantMessage = streamingAssistantMessage
+                        .copyWith(isProcessing: true);
+                    session.latestMessage = streamingAssistantMessage;
+                    stateNeedsUpdate = true;
+                    if (!wasProcessing) {
+                      ref.read(appHapticsProvider).light();
+                    }
+                    break;
+                  case ChatResponseType.prefillProgress:
+                    if (isCurrentContext) {
+                      final current = state.liveGeneration;
+                      if (current != null) {
+                        state = state.copyWith(
+                          liveGeneration: current.copyWith(
+                            realPrefillProgress: response.progress,
+                          ),
+                        );
+                      }
+                    }
+                    break;
+                  case ChatResponseType.timeoutError:
+                  case ChatResponseType.error:
+                    streamHadError = true;
+                    session.cancelUiTimer();
+                    streamingAssistantMessage = streamingAssistantMessage.copyWith(
+                      status: MessageStatus.error,
+                      errorMessage:
+                          response.content ??
+                          (response.type == ChatResponseType.timeoutError
+                              ? 'Model is taking too long to respond. This may happen with free tier models.'
+                              : 'An unknown error occurred.'),
+                      isProcessing: false,
+                    );
+                    session.latestMessage = streamingAssistantMessage;
+
+                    if (isCurrentContext) {
+                      _replaceMessageInState(
+                        streamingAssistantMessage,
+                        clearStreaming: true,
+                      );
+                      state = state.copyWith(
+                        isStreaming: false,
+                        errorMessage: streamingAssistantMessage.errorMessage,
+                        clearLiveGeneration: true,
+                      );
+                    }
+                    _endSession(session);
+                    session.latestMessage = null;
+                    await _saveService?.flush();
+                    await _saveMessage(
+                      streamingAssistantMessage,
+                      persist: session.persisted,
+                    );
+                    break;
+                  case ChatResponseType.toolCall:
+                    if (response.toolCall != null) {
+                      collectedToolCalls.add(response.toolCall!);
+                    }
+                    break;
+                  case ChatResponseType.invalidToolCall:
+                  case ChatResponseType.done:
+                    if (response.stats != null) {
+                      session.stats = response.stats;
+                    }
+                    break;
+                }
+              },
+              onDone: () async {
+                session.cancelUiTimer();
+                updateUiState();
+
+                if (streamHadError) {
+                  // The error branch already finalised the message and
+                  // stopped streaming — do not overwrite the error state
+                  // with success/default text.
+                  if (session.persisted) {
+                    await _saveService?.flush();
+                  }
+                  return;
+                }
+
+                if (session.persisted) {
+                  await _saveService?.flush();
+                }
+                final streamConvId = assistantMessage.conversationId;
+                final isCurrentContext = _activeConversationId == streamConvId;
+                final streamingMessage = streamingAssistantMessage;
+                final hasContent =
+                    _hasReplyContent(streamingMessage) ||
+                    (mcpConfig.enabled && collectedToolCalls.isNotEmpty);
+
+                if (!hasContent) {
+                  final errorMessage = streamingMessage.copyWith(
+                    status: MessageStatus.error,
+                    errorMessage:
+                        'The model returned an empty reply. Try regenerating the response.',
+                    isProcessing: false,
+                  );
+                  await _saveMessage(errorMessage, persist: session.persisted);
+                  if (ref.mounted && isCurrentContext) {
+                    _replaceMessageInState(errorMessage, clearStreaming: true);
+                    state = state.copyWith(
+                      isStreaming: false,
+                      errorMessage: errorMessage.errorMessage,
+                      clearLiveGeneration: true,
+                    );
+                  }
+                  if (ref.mounted) {
+                    _endSession(session);
+                  }
+                  session.latestMessage = null;
+                } else {
+                  var finalMessage = _finalizeStreamMessage(
+                    streamingMessage.copyWith(
+                      status: MessageStatus.complete,
+                      isProcessing: false,
+                    ),
+                    stopReason: 'complete',
+                    session: session,
+                  );
+
+                  if (mcpConfig.enabled && collectedToolCalls.isNotEmpty) {
+                    final toolReply = await _finishToolTurn(
+                      session,
+                      finalMessage,
+                      collectedToolCalls,
+                      selectedModel,
+                      effectiveModelId,
+                      content,
+                    );
+                    if (toolReply == null) return;
+                    finalMessage = toolReply;
+                  }
+
+                  await _saveMessage(finalMessage, persist: session.persisted);
+                  if (ref.mounted && isCurrentContext) {
+                    _replaceMessageInState(finalMessage, clearStreaming: true);
+                    state = state.copyWith(isStreaming: false);
+                    _maybeAutoGenerateTitleAfterFirstReply();
+                  }
+                  if (ref.mounted) {
+                    _endSession(session);
+                  }
+                  session.latestMessage = null;
+
+                  await _syncConversationStatsAfterGeneration(
+                    streamConvId,
+                    finalMessage,
+                    isCurrentContext: isCurrentContext,
+                  );
+
+                  if (ref.mounted && isCurrentContext) {
+                    _completeLiveGeneration(session, finalMessage);
+                  }
+                  if (ref.mounted) {
+                    await _maybeCountPrompt(session, streamConvId);
+                  }
+
+                  if (ref.mounted) {
+                    _maybeRequestReviewAfterSuccessfulCompletion(
+                      finalMessage: finalMessage,
+                      server: server,
+                      selectedModel: selectedModel,
+                    );
+                  }
+
+                  // Auto-speak: read the response aloud if the setting
+                  // is enabled and voice mode is not already handling TTS.
+                  if (ref.mounted) {
+                    final autoSpeak = ref
+                        .read(settingsProvider)
+                        .autoSpeakEnabled;
+                    final voiceActive =
+                        ref.read(voiceModeProvider).phase !=
+                        VoiceModePhase.idle;
+                    // Don't read a background reply aloud over another
+                    // chat (#94).
+                    if (autoSpeak &&
+                        !voiceActive &&
+                        _activeConversationId == finalMessage.conversationId &&
+                        finalMessage.content.trim().isNotEmpty) {
+                      ref
+                          .read(ttsProvider.notifier)
+                          .speak(
+                            finalMessage.content,
+                            messageId: finalMessage.id,
+                            conversationId: finalMessage.conversationId,
+                          );
+                    }
+                  }
+                }
+              },
+              onError: (error) async {
+                session.cancelUiTimer();
+                await _saveService?.flush();
+                final errorMessage = streamingAssistantMessage.copyWith(
+                  status: MessageStatus.error,
+                  errorMessage: error.toString(),
+                );
+                await _saveMessage(errorMessage, persist: session.persisted);
+
+                final streamConvId = assistantMessage.conversationId;
+                if (ref.mounted && _currentConversationId == streamConvId) {
+                  _replaceMessageInState(errorMessage, clearStreaming: true);
+                  state = state.copyWith(
+                    isStreaming: false,
+                    errorMessage: error.toString(),
+                    clearLiveGeneration: true,
+                  );
+                }
+                if (ref.mounted) {
+                  _endSession(session);
+                }
+                session.latestMessage = null;
+              },
+            );
+      }
+    } catch (e) {
+      session.cancelUiTimer();
+      final errorMsg = assistantMessage.copyWith(
+        status: MessageStatus.error,
+        errorMessage: e.toString(),
+        isProcessing: false,
+      );
+      await _saveMessage(errorMsg, persist: session.persisted);
+
+      if (!ref.mounted) return;
+
+      state = state.copyWith(
+        isStreaming: false,
+        errorMessage: e.toString(),
+        clearStreaming: true,
+        clearLiveGeneration: true,
+      );
+      _endSession(session);
+      session.latestMessage = null;
+    }
+  }
+
+  /// Inserts [content] as a message with the given [role] without calling
+  /// the chat service or starting generation. Used by the send button's
+  /// long-press ("insert without generating") and the role-swap button
+  /// (which lets the user manually author an assistant-role turn).
+  Future<void> insertMessageWithoutGenerating(
+    String content, {
+    required MessageRole role,
+    List<File>? attachments,
+  }) async {
+    final server = ref.read(activeServerProvider);
+    if (server == null) {
+      state = state.copyWith(errorMessage: 'No server connected');
+      return;
+    }
+
+    final trimmedContent = content.trim();
+    if (trimmedContent.isEmpty &&
+        (attachments == null || attachments.isEmpty)) {
+      return;
+    }
+
+    final titleSource = trimmedContent.isNotEmpty
+        ? trimmedContent
+        : (attachments?.isNotEmpty == true
+              ? attachments!.first.path.split(Platform.pathSeparator).last
+              : 'New Chat');
+    await _ensureConversationExists(titleSource);
+
+    final convId = _activeConversationId;
+    if (convId == null) return;
+
+    final List<String> savedPaths = [];
+    if (attachments != null && attachments.isNotEmpty) {
+      final appDir = await ref.read(storageDirectoryProvider.future);
+      final attachmentsDir = Directory('${appDir.path}/attachments');
+      if (!await attachmentsDir.exists()) {
+        await attachmentsDir.create(recursive: true);
+      }
+
+      for (final file in attachments) {
+        final savedPath = await AttachmentHelpers.saveAttachment(
+          file,
+          attachmentsDir,
+        );
+        if (savedPath != null) savedPaths.add(savedPath);
+      }
+    }
+
+    final threadOrder = MessageVariants.nextThreadOrder(state.messages);
+    final groupId = generateUuid();
+    final lastInTimeline = state.messages.isNotEmpty
+        ? state.messages.last
+        : null;
+
+    final message = Message(
+      id: generateUuid(),
+      conversationId: convId,
+      role: role,
+      content: trimmedContent,
+      createdAt: DateTime.now(),
+      status: MessageStatus.complete,
+      attachmentPaths: savedPaths.isNotEmpty ? savedPaths : null,
+      variantGroupId: groupId,
+      variantIndex: 0,
+      threadOrder: threadOrder,
+      isActiveVariant: true,
+      parentMessageId: lastInTimeline?.id,
+    );
+
+    final updatedAll = [...state.allMessages, message];
+    state = state.copyWith(
+      allMessages: updatedAll,
+      messages: MessageVariants.resolveActiveTimeline(updatedAll),
+      clearError: true,
+    );
+
+    await _saveMessage(message);
+
+    if (!ref.mounted) return;
+
+    if (!_isInMemoryChat && _currentConversationId != null) {
+      final preview = trimmedContent.isNotEmpty
+          ? (trimmedContent.length > 100
+                ? '${trimmedContent.substring(0, 100)}...'
+                : trimmedContent)
+          : (attachments?.isNotEmpty == true ? '[attachment]' : 'New message');
+      final timeline = state.messages;
+      await ref
+          .read(conv.conversationsProvider.notifier)
+          .syncConversationStats(
+            _currentConversationId!,
+            messageCount: timeline.length,
+            characterCount: timeline.fold<int>(
+              0,
+              (sum, message) => sum + message.content.length,
+            ),
+            preview: preview,
+          );
+    }
+  }
+
+  List<Message> _buildMessagesForApi(ModelInfo? selectedModel) {
+    final settings = ref.read(settingsProvider);
+    final messages = <Message>[];
+
+    final reasoningConfig = ref.read(chatReasoningConfigProvider);
+    final reasoningMandatory = selectedModel?.reasoningMandatory ?? false;
+    final shouldDisableThinking =
+        (selectedModel?.supportsReasoning ?? false) &&
+        !reasoningMandatory &&
+        !reasoningConfig.enabled;
+
+    final personaPrompt = _getPersonaSystemPrompt();
+    var systemContent =
+        personaPrompt ??
+        (settings.showSystemMessages
+            ? 'You are LocalMind, a helpful AI assistant. Provide clear, accurate, and concise responses.'
+            : null);
+
+    final isVoiceActive = ref.read(voiceModeProvider).isActive;
+    if (isVoiceActive && settings.conciseVoiceResponsesEnabled) {
+      const conciseInstruction =
+          'Respond concisely in a single short paragraph and end with a relevant follow-up question to keep the spoken conversation engaging.';
+      systemContent = (systemContent == null || systemContent.trim().isEmpty)
+          ? conciseInstruction
+          : '$systemContent\n$conciseInstruction';
+    }
+
+    if (shouldDisableThinking) {
+      // Hybrid reasoning models (Qwen3 and similar) key off this literal
+      // token in the prompt to skip their <think> block — send it whenever
+      // the model supports reasoning and the user has switched Think off,
+      // alongside the request-level reasoning-disable fields.
+      systemContent = (systemContent == null || systemContent.trim().isEmpty)
+          ? '/no_think'
+          : '$systemContent\n/no_think';
+    }
+
+    if (systemContent != null) {
+      messages.add(
+        Message(
+          id: 'system-$_currentConversationId',
+          conversationId: _currentConversationId ?? '',
+          role: MessageRole.system,
+          content: systemContent,
+          createdAt: DateTime.now(),
+          status: MessageStatus.complete,
+        ),
+      );
+    }
+
+    for (final message in state.messages) {
+      if (!shouldIncludeMessageInChatContext(message)) {
+        continue;
+      }
+      if (message.role != MessageRole.system || settings.showSystemMessages) {
+        messages.add(message);
+      }
+    }
+
+    final contextLength = ref.read(chatParamsProvider).contextLength;
+    final history = _truncateToContextWindow(messages, contextLength);
+    final callIds = {
+      for (final message in history)
+        for (final call in message.toolCalls ?? const []) call.id,
+    };
+    return history
+        .where(
+          (message) =>
+              message.role != MessageRole.tool ||
+              callIds.contains(message.toolCallId),
+        )
+        .toList();
+  }
+
+  List<Message> _buildMessagesForContinue(
+    ModelInfo? selectedModel,
+    Message assistantMessage,
+  ) {
+    final messages = _buildMessagesForApi(selectedModel);
+    if (messages.isEmpty) return messages;
+    if (messages.last.role != MessageRole.assistant) return messages;
+
+    messages[messages.length - 1] = assistantMessage.copyWith(
+      status: MessageStatus.complete,
+      isProcessing: false,
+    );
+    return messages;
+  }
+
+  String? _getPersonaSystemPrompt() {
+    if (_useFreshConversationSystemPrompt) {
+      _useFreshConversationSystemPrompt = false;
+      final override = _freshConversationSystemPrompt;
+      _freshConversationSystemPrompt = null;
+      if (override != null && override.trim().isNotEmpty) return override;
+    }
+
+    final conversation = ref.read(conv.activeConversationProvider);
+    if (conversation?.systemPrompt != null &&
+        conversation!.systemPrompt!.trim().isNotEmpty) {
+      return conversation.systemPrompt;
+    }
+
+    final personaIds = conversation?.personaId;
+    if (personaIds == null || personaIds.isEmpty) {
+      return _defaultSystemPrompt();
+    }
+
+    try {
+      final personas = ref.read(personasNotifierProvider).value ?? [];
+      final selected = PersonaPromptUtils.resolvePersonas(personaIds, personas);
+      if (selected.isEmpty) return _defaultSystemPrompt();
+      return PersonaPromptUtils.combineSystemPrompts(selected);
+    } catch (_) {}
+
+    return _defaultSystemPrompt();
+  }
+
+  /// Settings fallback, used only when the chat has no prompt of its own and
+  /// no persona (#81).
+  String? _defaultSystemPrompt() {
+    final prompt = ref.read(settingsProvider).defaultSystemPrompt.trim();
+    return prompt.isEmpty ? null : prompt;
+  }
+
+  List<Message> _truncateToContextWindow(
+    List<Message> messages,
+    int contextLength,
+  ) {
+    if (messages.isEmpty) return messages;
+
+    int estimatedTokens = 0;
+    final result = <Message>[];
+    const tokensPerChar = 4;
+
+    for (int i = messages.length - 1; i >= 0; i--) {
+      final message = messages[i];
+      estimatedTokens += (message.content.length / tokensPerChar).ceil();
+
+      if (estimatedTokens > contextLength) {
+        break;
+      }
+      result.insert(0, message);
+    }
+
+    return result;
+  }
+
+  /// Waits for any in-flight AI title generation on [conversationId] to complete.
+  /// Used by downstream post-generation tasks (like smart reply generation)
+  /// so LLM inference calls execute sequentially without colliding on local models.
+  Future<void> waitForTitleGeneration(String conversationId) async {
+    final future = _titleGenerationFutures[conversationId];
+    if (future != null) {
+      try {
+        await future;
+      } catch (_) {
+        // Title generation errors should not fail downstream consumers.
+      }
+    }
+  }
+
+  /// Returns true if AI title generation is currently in flight for [conversationId].
+  bool isTitleGenerationInFlight(String conversationId) {
+    return _titleGenerationsInFlight.contains(conversationId) ||
+        _titleGenerationFutures.containsKey(conversationId);
+  }
+
+  /// Titles a chat after its first reply. Defaults to the open chat; pass
+  /// [conversationId] and its [timeline] for a reply that finished in the
+  /// background.
+  Future<void>? _maybeAutoGenerateTitleAfterFirstReply({
+    String? conversationId,
+    List<Message>? timeline,
+  }) {
+    final convId = conversationId ?? _currentConversationId;
+    if (convId == null) return null;
+    final isOpenChat = convId == _currentConversationId;
+    if (isOpenChat && _isInMemoryChat) return null;
+
+    final settings = ref.read(settingsProvider);
+    if (!settings.autoGenerateTitle) return null;
+
+    final conversation = isOpenChat
+        ? ref.read(conv.activeConversationProvider)
+        : ref
+              .read(conv.conversationsProvider)
+              .value
+              ?.where((c) => c.id == convId)
+              .firstOrNull;
+    if (conversation == null ||
+        conversation.isTemporary ||
+        conversation.title != 'New Chat') {
+      return null;
+    }
+
+    final messages = timeline ?? state.messages;
+    final assistantCount = messages
+        .where((m) => m.role == MessageRole.assistant)
+        .length;
+    if (assistantCount != 1) return null;
+
+    return _generateAndApplyTitle(convId);
+  }
+
+  Future<void> _generateAndApplyTitle(String conversationId) {
+    if (!_titleGenerationsInFlight.add(conversationId)) {
+      return _titleGenerationFutures[conversationId] ?? Future<void>.value();
+    }
+    final future = () async {
+      try {
+        final title = await generateTitleWithAi(conversationId);
+        if (!ref.mounted) return;
+        if (title == null || title.isEmpty || title == 'New Chat') return;
+
+        await ref
+            .read(conv.conversationsProvider.notifier)
+            .renameConversation(conversationId, title);
+      } finally {
+        _titleGenerationsInFlight.remove(conversationId);
+        _titleGenerationFutures.remove(conversationId);
+      }
+    }();
+    _titleGenerationFutures[conversationId] = future;
+    return future;
+  }
+
+  Future<String?> generateTitleWithAi(String conversationId) async {
+    final messages = await _loadMessagesForConversation(conversationId);
+    if (!ref.mounted) return null;
+    if (messages.isEmpty) return null;
+
+    final timeline = MessageVariants.resolveActiveTimeline(messages);
+    if (timeline.isEmpty) return null;
+
+    final conversation = ref
+        .read(conv.conversationsProvider)
+        .value
+        ?.where((c) => c.id == conversationId)
+        .firstOrNull;
+
+    final server = _resolveServerForTitle(conversation);
+    final modelId = _resolveModelIdForTitle(conversation);
+    final titleService = ref.read(titleGenerationServiceProvider);
+
+    if (server == null || modelId == null) {
+      return _fallbackTitleFromMessages(timeline, titleService);
+    }
+
+    final chatService = _resolveChatServiceForTitle(server);
+    if (chatService == null) {
+      return _fallbackTitleFromMessages(timeline, titleService);
+    }
+
+    final generated = await titleService.generateTitleWithLLM(
+      chatService: chatService,
+      server: server,
+      modelId: modelId,
+      messages: timeline,
+      params: ref.read(chatParamsProvider),
+    );
+
+    if (!ref.mounted) return null;
+    if (generated != null && generated.isNotEmpty) {
+      return generated;
+    }
+    return _fallbackTitleFromMessages(timeline, titleService);
+  }
+
+  Future<List<Message>> _loadMessagesForConversation(
+    String conversationId,
+  ) async {
+    if (_currentConversationId == conversationId &&
+        state.allMessages.isNotEmpty) {
+      return MessageVariants.resolveActiveTimeline(state.allMessages);
+    }
+
+    final db = ref.read(databaseProvider);
+    final loaded = await db.store.runInTransactionAsync(
+      TxMode.read,
+      _loadMessagesInBackground,
+      conversationId,
+    );
+    return MessageVariants.resolveActiveTimeline(loaded);
+  }
+
+  Server? _resolveServerForTitle(Conversation? conversation) {
+    if (conversation?.serverId != null) {
+      final servers = ref.read(serversProvider).value ?? [];
+      for (final server in servers) {
+        if (server.id == conversation!.serverId) {
+          return server;
+        }
+      }
+    }
+    return ref.read(activeServerProvider);
+  }
+
+  String? _resolveModelIdForTitle(Conversation? conversation) {
+    return conversation?.modelId ??
+        ref.read(activeChatTargetProvider).effectiveModelId;
+  }
+
+  ChatService? _resolveChatServiceForTitle(Server server) {
+    final active = ref.read(activeServerProvider);
+    if (active?.id == server.id) {
+      return ref.read(chatServiceProvider);
+    }
+
+    return createChatServiceForServer(
+      server: server,
+      dio: ref.read(dioProvider),
+      onDeviceGemmaService: ref.read(onDeviceGemmaServiceProvider),
+      onDeviceLlamaService: ref.read(onDeviceLlamaServiceProvider),
+      onDeviceMlxService: ref.read(onDeviceMlxServiceProvider),
+      loadedOnDeviceRuntime: ref.read(
+        onDeviceEngineProvider.select((s) => s.loadedRuntime),
+      ),
+    );
+  }
+
+  String _fallbackTitleFromMessages(
+    List<Message> messages,
+    TitleGenerationService titleService,
+  ) {
+    final userMessage = messages
+        .where((m) => m.role == MessageRole.user)
+        .firstOrNull;
+    if (userMessage == null || userMessage.content.trim().isEmpty) {
+      return 'New Chat';
+    }
+    return titleService.truncateFirstMessageTitle(userMessage.content);
+  }
+
+  void _maybeRequestReviewAfterSuccessfulCompletion({
+    required Message finalMessage,
+    required Server server,
+    required ModelInfo? selectedModel,
+  }) {
+    final modelId =
+        selectedModel?.id ??
+        ref.read(activeChatTargetProvider).effectiveModelId;
+
+    unawaited(
+      ref
+          .read(reviewPromptServiceProvider)
+          .maybeRequestReviewAfterSuccessfulChat(
+            assistantContent: finalMessage.content,
+            serverType: server.type,
+            modelId: modelId,
+            usedCustomPersona: _isUsingCustomPersona(),
+          )
+          .catchError((Object error, StackTrace stackTrace) {
+            Log.error('Review prompt request failed: $error');
+            return false;
+          }),
+    );
+  }
+
+  bool _isUsingCustomPersona() {
+    final activeConversation = ref.read(conv.activeConversationProvider);
+    final personaId = activeConversation?.personaId;
+    if (personaId == null) return false;
+
+    final personas = ref.read(personasNotifierProvider).value ?? [];
+    return personas.any(
+      (persona) => persona.id == personaId && !persona.isBuiltIn,
+    );
+  }
+
+  Future<void> cancelStream() async {
+    final session = _activeSession;
+    _clearPendingApproval();
+    await session?.detach();
+    if (!ref.mounted) return;
+
+    session?.chatService.cancelStream();
+
+    await _saveService?.flush();
+    if (!ref.mounted) return;
+
+    final streamingMessage = session?.latestMessage ?? state.streamingMessage;
+    if (streamingMessage != null) {
+      final finalMessage = _finalizeStreamMessage(
+        streamingMessage.copyWith(
+          status: MessageStatus.cancelled,
+          isProcessing: false,
+        ),
+        stopReason: 'cancelled',
+        session: session,
+      );
+      await _saveMessage(finalMessage, persist: session?.persisted);
+      if (!ref.mounted) return;
+      _replaceMessageInState(finalMessage, clearStreaming: true);
+    }
+
+    if (!ref.mounted) return;
+    state = state.copyWith(
+      isStreaming: false,
+      clearStreaming: true,
+      clearLiveGeneration: true,
+    );
+    session?.latestMessage = null;
+    if (session != null) _endSession(session);
+  }
+
+  Future<void> retryLastMessage() async {
+    if (_blockIfOnDeviceBusy()) return;
+    final messages = state.messages;
+    if (messages.isEmpty) return;
+
+    final lastAssistantIndex = messages.lastIndexWhere(
+      (m) => m.role == MessageRole.assistant,
+    );
+    if (lastAssistantIndex < 0) return;
+
+    Message? userMessage;
+    for (var i = lastAssistantIndex - 1; i >= 0; i--) {
+      if (messages[i].role == MessageRole.user) {
+        userMessage = messages[i];
+        break;
+      }
+    }
+    if (userMessage == null) return;
+
+    final userMessageIndex = messages.indexWhere(
+      (m) => m.id == userMessage!.id,
+    );
+    final messagesToRemove = messages.sublist(userMessageIndex);
+    final db = ref.read(databaseProvider);
+
+    for (final msg in messagesToRemove) {
+      final query = db.messageBox
+          .query(MessageEntity_.id.equals(msg.id))
+          .build();
+      db.messageBox.removeMany(query.findIds());
+      query.close();
+    }
+
+    unawaited(
+      GeneratedImageFiles.prune(
+        db.messageBox,
+        messagesToRemove.expand((m) => m.attachmentPaths ?? const <String>[]),
+      ),
+    );
+    final removedIds = messagesToRemove.map((m) => m.id).toSet();
+    final updatedAll = state.allMessages
+        .where((m) => !removedIds.contains(m.id))
+        .toList();
+    state = state.copyWith(
+      allMessages: updatedAll,
+      messages: messages.sublist(0, userMessageIndex),
+      clearStreaming: true,
+    );
+
+    await sendMessage(
+      userMessage.content,
+      attachments: userMessage.attachmentPaths?.map((p) => File(p)).toList(),
+    );
+  }
+
+  Future<void> continueFromMessage(String messageId) async {
+    if (_blockIfOnDeviceBusy()) return;
+    final messages = state.messages;
+    if (messages.isEmpty || messages.last.id != messageId) return;
+    final assistant = messages.last;
+    if (assistant.role != MessageRole.assistant ||
+        assistant.attachmentPaths?.any(AttachmentHelpers.isImagePath) == true ||
+        ImageGenerationFailure.fromCode(assistant.errorMessage) != null) {
+      return;
+    }
+    if (state.isStreaming) return;
+
+    final target = ref.read(activeChatTargetProvider);
+    if (target.isImageGeneration) return;
+    final server = target.server;
+    final effectiveModelId = target.effectiveModelId;
+    if (server == null || effectiveModelId == null) return;
+    final chatService = ref.read(chatServiceFactoryProvider)(server);
+    if (chatService == null) return;
+
+    final streamingAssistant = assistant.copyWith(
+      status: MessageStatus.streaming,
+      isProcessing: true,
+    );
+    final updatedAll = state.allMessages.map((m) {
+      return m.id == streamingAssistant.id ? streamingAssistant : m;
+    }).toList();
+    state = state.copyWith(
+      allMessages: updatedAll,
+      messages: MessageVariants.resolveActiveTimeline(updatedAll),
+      isStreaming: true,
+      streamingMessage: streamingAssistant,
+      clearError: true,
+    );
+    final session = _beginSession(
+      streamingAssistant.conversationId,
+      server,
+      chatService,
+    );
+    session.resetCheckpointMetrics();
+    session.updateSavedMetrics(streamingAssistant);
+    session.latestMessage = streamingAssistant;
+
+    await _runAssistantStream(
+      session,
+      streamingAssistant,
+      target.selectedModel,
+      effectiveModelId: effectiveModelId,
+      continueGeneration: true,
+    );
+  }
+
+  Future<void> cycleMessageVariant(String messageId, int direction) async {
+    Message? displayMsg;
+    for (final m in state.messages) {
+      if (m.id == messageId) {
+        displayMsg = m;
+        break;
+      }
+    }
+    if (displayMsg == null) return;
+
+    final variants = MessageVariants.variantsForMessage(
+      state.allMessages,
+      displayMsg,
+    );
+    if (variants.length <= 1) return;
+
+    final currentIndex = MessageVariants.activeVariantIndex(variants);
+    final newIndex = (currentIndex + direction).clamp(0, variants.length - 1);
+    if (newIndex == currentIndex) return;
+
+    final variantIds = variants.map((variant) => variant.id).toSet();
+    final targetId = variants[newIndex].id;
+    final updatedAll = state.allMessages.map((message) {
+      if (!variantIds.contains(message.id)) return message;
+      return message.copyWith(isActiveVariant: message.id == targetId);
+    }).toList();
+
+    for (final message in updatedAll.where((m) => variantIds.contains(m.id))) {
+      await _saveMessage(message);
+    }
+    _setAllMessages(updatedAll);
+  }
+
+  int _nextVariantIndex(String groupId) {
+    final variants = state.allMessages.where(
+      (m) => MessageVariants.groupId(m) == groupId,
+    );
+    if (variants.isEmpty) return 0;
+    return variants.map((m) => m.variantIndex).reduce((a, b) => a > b ? a : b) +
+        1;
+  }
+
+  Future<void> retryMessage(String messageId) async {
+    if (_blockIfOnDeviceBusy()) return;
+    if (state.isStreaming || _isRegenerating) return;
+    _isRegenerating = true;
+    try {
+      final messageIndex = state.messages.indexWhere((m) => m.id == messageId);
+      if (messageIndex == -1) return;
+
+      final message = state.messages[messageIndex];
+      if (message.role != MessageRole.assistant) return;
+
+      final groupId = MessageVariants.groupId(message);
+      final turnIndex = state.messages.indexWhere(
+        (entry) =>
+            entry.role == MessageRole.assistant &&
+            MessageVariants.groupId(entry) == groupId,
+      );
+      if (turnIndex > 0 &&
+          state.messages[turnIndex - 1].role == MessageRole.user) {
+        final userMessage = state.messages[turnIndex - 1];
+        if (ref.read(activeChatTargetProvider).isImageGeneration &&
+            !_canGenerateImage(
+              userMessage.content,
+              hasAttachments: userMessage.attachmentPaths?.isNotEmpty == true,
+            )) {
+          return;
+        }
+
+        final deactivated = state.allMessages.map((m) {
+          if (MessageVariants.groupId(m) != groupId) return m;
+          return m.copyWith(isActiveVariant: false);
+        }).toList();
+        for (final m in deactivated.where(
+          (x) => MessageVariants.groupId(x) == groupId,
+        )) {
+          await _saveMessage(m);
+        }
+        state = state.copyWith(allMessages: deactivated);
+
+        await _regenerateAssistant(
+          userMessage,
+          variantGroupId: groupId,
+          threadOrder: state.messages[turnIndex].threadOrder,
+          variantIndex: _nextVariantIndex(groupId),
+        );
+      }
+    } finally {
+      _isRegenerating = false;
+    }
+  }
+
+  Future<void> _regenerateAssistant(
+    Message userMessage, {
+    required String variantGroupId,
+    required int threadOrder,
+    required int variantIndex,
+  }) async {
+    if (_blockIfOnDeviceBusy()) return;
+    final target = ref.read(activeChatTargetProvider);
+    final selectedModel = target.selectedModel;
+    final server = target.server;
+    final effectiveModelId = target.effectiveModelId;
+    if (server == null ||
+        effectiveModelId == null ||
+        _activeConversationId == null) {
+      return;
+    }
+
+    if (target.isImageGeneration &&
+        !_canGenerateImage(
+          userMessage.content,
+          hasAttachments: userMessage.attachmentPaths?.isNotEmpty == true,
+        )) {
+      return;
+    }
+
+    await _abortStreamImmediately();
+    if (!ref.mounted) return;
+
+    final assistantMessage = Message(
+      id: generateUuid(),
+      conversationId: _activeConversationId!,
+      role: MessageRole.assistant,
+      content: '',
+      createdAt: DateTime.now(),
+      status: MessageStatus.streaming,
+      modelId: effectiveModelId,
+      variantGroupId: variantGroupId,
+      variantIndex: variantIndex,
+      threadOrder: threadOrder,
+      isActiveVariant: true,
+      parentMessageId: userMessage.id,
+    );
+
+    final updatedAll = [...state.allMessages, assistantMessage];
+    state = state.copyWith(
+      allMessages: updatedAll,
+      messages: MessageVariants.resolveActiveTimeline(updatedAll),
+      isStreaming: true,
+      streamingMessage: assistantMessage,
+      clearError: true,
+    );
+    final chatService = ref.read(chatServiceFactoryProvider)(server);
+    if (chatService == null) {
+      state = state.copyWith(
+        isStreaming: false,
+        errorMessage: 'No chat service available',
+        clearStreaming: true,
+      );
+      return;
+    }
+    final session = _beginSession(
+      assistantMessage.conversationId,
+      server,
+      chatService,
+      isImageGeneration: target.isImageGeneration,
+      countsAsPrompt: true,
+    );
+    if (session.isImageGeneration) {
+      unawaited(
+        _runImageGeneration(
+          session,
+          assistantMessage,
+          effectiveModelId,
+          userMessage.content,
+        ),
+      );
+      return;
+    }
+    await _saveMessage(assistantMessage, persist: session.persisted);
+    if (!ref.mounted) return;
+
+    session.resetCheckpointMetrics();
+    session.updateSavedMetrics(assistantMessage);
+
+    await _runAssistantStream(
+      session,
+      assistantMessage,
+      selectedModel,
+      effectiveModelId: effectiveModelId,
+    );
+  }
+
+  Future<Message?> _finishToolTurn(
+    GenerationSession session,
+    Message assistant,
+    List<ToolCallData> calls,
+    ModelInfo? selectedModel,
+    String modelId,
+    String userContent,
+  ) async {
+    try {
+      // LM Studio can report the same call more than once, including a
+      // completed event with the output already attached.
+      final callsByName = {for (final call in calls) call.tool: call};
+      final events = <ToolEvent>[];
+      final clientCalls = <ParsedToolCall>[];
+      for (final call in callsByName.values) {
+        if (call.output == null) {
+          clientCalls.add(
+            ParsedToolCall(
+              id: call.tool,
+              name: call.tool,
+              arguments: call.arguments,
+            ),
+          );
+        } else {
+          events.add(
+            ToolEvent(
+              eventId: generateUuid(),
+              timestamp: DateTime.now(),
+              status: ToolEventStatus.completed,
+              toolName: call.tool,
+              providerType: ToolProviderType.lmStudioServer,
+              arguments: call.arguments,
+              result: call.output,
+            ),
+          );
+        }
+      }
+
+      if (clientCalls.isNotEmpty && ref.mounted && !session.cancelled) {
+        final loop = ToolExecutionLoop(
+          adapter: createAdapterForServerType(session.server.type),
+          registry: ref.read(toolRegistryProvider),
+          onRequestApproval: (call) async {
+            if (!ref.mounted || session.cancelled) return false;
+            final approval = PendingToolApproval(
+              toolCall: call,
+              completer: Completer<bool>(),
+            );
+            _pendingToolApproval = approval;
+            state = state.copyWith(pendingToolApproval: approval);
+            try {
+              return await approval.completer.future.timeout(
+                const Duration(seconds: 60),
+                onTimeout: () => false,
+              );
+            } finally {
+              if (identical(_pendingToolApproval, approval)) {
+                _clearPendingApproval();
+              }
+            }
+          },
+        );
+        final result = await loop.run(
+          initialUserMessage: userContent,
+          assistantContent: assistant.content,
+          preParsedCalls: clientCalls,
+        );
+        events.addAll(result.events);
+      }
+
+      if (!ref.mounted || session.cancelled) return null;
+      if (events.isNotEmpty) assistant = assistant.copyWith(toolEvents: events);
+      if (events.any((event) => event.status == ToolEventStatus.completed) &&
+          _activeConversationId == session.conversationId) {
+        await _sendFollowupWithToolResults(
+          session,
+          previousAssistant: assistant,
+          toolEvents: events,
+          selectedModel: selectedModel,
+          effectiveModelId: modelId,
+        );
+        return null;
+      }
+    } catch (error) {
+      Log.error('Tool execution failed: $error');
+      if (!ref.mounted || session.cancelled) return null;
+    }
+    if (_hasReplyContent(assistant)) return assistant;
+    return assistant.copyWith(
+      status: MessageStatus.error,
+      errorMessage: 'The tool call did not produce a reply.',
+      stopReason: 'error',
+    );
+  }
+
+  bool _hasReplyContent(Message message) =>
+      message.content.trim().isNotEmpty ||
+      (message.reasoningContent?.trim().isNotEmpty ?? false);
+
+  /// After successful tool execution (issue #77), build `tool` role messages
+  /// for each completed tool event, persist them, and re-issue the chat
+  /// completion so the model can produce the final answer.
+  ///
+  /// The assistant message emitted in the first turn has its `toolCalls`
+  /// field populated with the executed results, plus matching `MessageRole.tool`
+  /// messages are appended right after it so the OpenAI-compatible protocol
+  /// gets the `tool_call_id` ↔ `tool_calls[].id` pairing the model needs to
+  /// continue the turn.
+  Future<void> _sendFollowupWithToolResults(
+    GenerationSession origin, {
+    required Message previousAssistant,
+    required List<ToolEvent> toolEvents,
+    required ModelInfo? selectedModel,
+    required String effectiveModelId,
+  }) async {
+    final completed = toolEvents
+        .where((e) => e.status == ToolEventStatus.completed)
+        .toList();
+
+    // Synthesize stable tool-call IDs that match between the assistant
+    // message's `tool_calls[].id` and the tool role message's `tool_call_id`.
+    // The streaming-side `ToolCallData` doesn't carry an OpenAI `id`, so we
+    // mint one here and reuse it on both sides.
+    String toolCallIdFor(ToolEvent event) {
+      final uniqueSuffix = event.eventId.isNotEmpty
+          ? event.eventId
+          : '${event.toolName}_${event.timestamp.microsecondsSinceEpoch}';
+      return 'call_${uniqueSuffix}_completed';
+    }
+
+    final toolCallEntries = completed
+        .map(
+          (e) => msg_model.ToolCallData(
+            id: toolCallIdFor(e),
+            toolName: e.toolName,
+            arguments: e.arguments ?? const {},
+            result: e.result,
+          ),
+        )
+        .toList();
+
+    final assistantWithToolCalls = previousAssistant.copyWith(
+      toolCalls: toolCallEntries,
+      stopReason: 'tool_use',
+    );
+    await _saveMessage(assistantWithToolCalls, persist: origin.persisted);
+
+    final toolMessages = completed.map((e) {
+      final callId = toolCallIdFor(e);
+      return Message(
+        id: 'tool_${callId}_${e.timestamp.microsecondsSinceEpoch}',
+        conversationId: previousAssistant.conversationId,
+        role: MessageRole.tool,
+        content: e.result ?? e.error ?? '',
+        createdAt: e.timestamp,
+        status: MessageStatus.complete,
+        toolCallId: callId,
+        toolSessionId: previousAssistant.toolSessionId,
+        parentMessageId: previousAssistant.id,
+        threadOrder: previousAssistant.threadOrder,
+        variantGroupId: previousAssistant.variantGroupId,
+        variantIndex: previousAssistant.variantIndex,
+      );
+    }).toList();
+
+    for (final tm in toolMessages) {
+      await _saveMessage(tm, persist: origin.persisted);
+    }
+
+    if (!ref.mounted ||
+        origin.cancelled ||
+        _activeConversationId != origin.conversationId) {
+      _endSession(origin);
+      return;
+    }
+
+    final messagesWithTools = [
+      for (final message in state.allMessages)
+        if (message.id == assistantWithToolCalls.id)
+          assistantWithToolCalls
+        else
+          message,
+      ...toolMessages,
+    ];
+    final continuationThreadOrder = MessageVariants.nextThreadOrder(
+      messagesWithTools,
+    );
+    final continuationMessage = Message(
+      id: generateUuid(),
+      conversationId: previousAssistant.conversationId,
+      role: MessageRole.assistant,
+      content: '',
+      createdAt: DateTime.now(),
+      status: MessageStatus.streaming,
+      modelId: effectiveModelId,
+      variantGroupId: previousAssistant.variantGroupId,
+      variantIndex: previousAssistant.variantIndex + 1,
+      threadOrder: continuationThreadOrder,
+      isActiveVariant: true,
+      parentMessageId: previousAssistant.id,
+    );
+
+    await _saveMessage(continuationMessage, persist: origin.persisted);
+    if (!ref.mounted ||
+        origin.cancelled ||
+        _activeConversationId != origin.conversationId) {
+      _endSession(origin);
+      return;
+    }
+
+    final newAllWithAssistant = [...messagesWithTools, continuationMessage];
+    state = state.copyWith(
+      allMessages: newAllWithAssistant,
+      messages: MessageVariants.resolveActiveTimeline(newAllWithAssistant),
+      isStreaming: true,
+      streamingMessage: continuationMessage,
+      clearStreaming: false,
+    );
+    final session = _beginSession(
+      continuationMessage.conversationId,
+      origin.server,
+      origin.chatService,
+    );
+    await _runAssistantStream(
+      session,
+      continuationMessage,
+      selectedModel,
+      effectiveModelId: effectiveModelId,
+      isToolFollowup: true,
+    );
+  }
+
+  Future<void> _runAssistantStream(
+    GenerationSession session,
+    Message assistantMessage,
+    ModelInfo? selectedModel, {
+    required String effectiveModelId,
+    bool continueGeneration = false,
+    bool isToolFollowup = false,
+  }) async {
+    final server = session.server;
+    final chatService = session.chatService;
+    final chatParams = ref.read(chatParamsProvider);
+
+    final messagesForApi = continueGeneration
+        ? _buildMessagesForContinue(selectedModel, assistantMessage)
+        : _buildMessagesForApi(selectedModel);
+
+    if (!isToolFollowup &&
+        _activeConversationId == assistantMessage.conversationId) {
+      state = state.copyWith(
+        liveGeneration: LiveGeneration(
+          phase: LiveGenerationPhase.processingPrompt,
+          startedAt: DateTime.now(),
+          estimatedPrefillMs: PrefillEstimator.estimatePrefillMs(
+            inputChars: messagesForApi.fold<int>(
+              0,
+              (s, m) => s + m.content.length,
+            ),
+            isOnDevice: server.isOnDevice,
+          ),
+        ),
+      );
+    }
+
+    try {
+      session.resetStreamMetrics();
+
+      String reasoningContent = '';
+      var streamingAssistantMessage = assistantMessage;
+      session.latestMessage = streamingAssistantMessage;
+      var isFirstContinueChunk = continueGeneration;
+
+      final mcpConfig = ref.read(chatMcpConfigProvider);
+      final activeIntegrations = mcpConfig.integrations
+          .where((i) => i.enabled)
+          .toList();
+      final toolsEnabled = mcpConfig.enabled && !isToolFollowup;
+      final integrations = toolsEnabled && activeIntegrations.isNotEmpty
+          ? activeIntegrations
+          : null;
+
+      final tools = await _toolsForTurn(toolsEnabled);
+      final collectedToolCalls = <ToolCallData>[];
+
+      bool stateNeedsUpdate = false;
+      bool streamHadError = false;
+
+      void updateUiState() {
+        if (!stateNeedsUpdate) return;
+        stateNeedsUpdate = false;
+        if (_activeConversationId == assistantMessage.conversationId) {
+          state = state.copyWith(streamingMessage: streamingAssistantMessage);
+        }
+      }
+
+      if (!ref.mounted || session.cancelled) return;
+
+      session.uiUpdateTimer = Timer.periodic(const Duration(milliseconds: 80), (
+        _,
+      ) {
+        updateUiState();
+      });
+
+      session.subscription = chatService
+          .sendMessage(
+            server: server,
+            modelId: effectiveModelId,
+            messages: messagesForApi,
+            params: chatParams,
+            integrations: integrations,
+            tools: tools,
+            continueGeneration: continueGeneration,
+          )
+          .listen(
+            (response) async {
+              if (session.cancelled || !ref.mounted) return;
+              final streamConvId = assistantMessage.conversationId;
+              final isCurrentContext = _activeConversationId == streamConvId;
+
+              switch (response.type) {
+                case ChatResponseType.message:
+                  if (response.content?.isNotEmpty ?? false) {
+                    if (session.noteFirstToken()) _markFirstToken(session);
+                  }
+                  var delta = response.content ?? '';
+                  if (isFirstContinueChunk && delta.isNotEmpty) {
+                    isFirstContinueChunk = false;
+                    final existing = streamingAssistantMessage.content;
+                    if (existing.isNotEmpty &&
+                        !RegExp(
+                          r'[\s\p{P}]$',
+                          unicode: true,
+                        ).hasMatch(existing) &&
+                        !RegExp(r'^[\s\p{P}]', unicode: true).hasMatch(delta)) {
+                      delta = ' $delta';
+                    }
+                  }
+                  streamingAssistantMessage = streamingAssistantMessage
+                      .copyWith(
+                        content: streamingAssistantMessage.content + delta,
+                        isProcessing: false,
+                      );
+                  session.latestMessage = streamingAssistantMessage;
+                  session.chunkCount++;
+                  if (session.persisted &&
+                      session.shouldCheckpointSave(streamingAssistantMessage)) {
+                    _saveService?.enqueue(streamingAssistantMessage);
+                    session.updateSavedMetrics(streamingAssistantMessage);
+                    session.resetCheckpointMetrics();
+                  }
+                  stateNeedsUpdate = true;
+                  break;
+                case ChatResponseType.reasoning:
+                  if (response.reasoningContent?.isNotEmpty ?? false) {
+                    if (session.noteFirstToken()) _markFirstToken(session);
+                  }
+                  reasoningContent += response.reasoningContent ?? '';
+                  streamingAssistantMessage = streamingAssistantMessage
+                      .copyWith(
+                        reasoningContent: reasoningContent,
+                        isProcessing: false,
+                      );
+                  session.latestMessage = streamingAssistantMessage;
+                  session.chunkCount++;
+                  if (session.persisted &&
+                      session.shouldCheckpointSave(streamingAssistantMessage)) {
+                    _saveService?.enqueue(streamingAssistantMessage);
+                    session.updateSavedMetrics(streamingAssistantMessage);
+                    session.resetCheckpointMetrics();
+                  }
+                  stateNeedsUpdate = true;
+                  break;
+                case ChatResponseType.processing:
+                  streamingAssistantMessage = streamingAssistantMessage
+                      .copyWith(isProcessing: true);
+                  session.latestMessage = streamingAssistantMessage;
+                  stateNeedsUpdate = true;
+                  break;
+                case ChatResponseType.prefillProgress:
+                  if (isCurrentContext) {
+                    final current = state.liveGeneration;
+                    if (current != null) {
+                      state = state.copyWith(
+                        liveGeneration: current.copyWith(
+                          realPrefillProgress: response.progress,
+                        ),
+                      );
+                    }
+                  }
+                  break;
+                case ChatResponseType.timeoutError:
+                case ChatResponseType.error:
+                  streamHadError = true;
+                  session.cancelUiTimer();
+                  streamingAssistantMessage = _finalizeStreamMessage(
+                    streamingAssistantMessage.copyWith(
+                      status: MessageStatus.error,
+                      errorMessage: response.content,
+                      isProcessing: false,
+                    ),
+                    stopReason: 'error',
+                    session: session,
+                  );
+                  await _saveMessage(
+                    streamingAssistantMessage,
+                    persist: session.persisted,
+                  );
+                  if (ref.mounted) {
+                    if (isCurrentContext) {
+                      _replaceMessageInAll(
+                        streamingAssistantMessage,
+                        clearStreaming: true,
+                      );
+                      state = state.copyWith(
+                        isStreaming: false,
+                        clearStreaming: true,
+                        clearLiveGeneration: true,
+                      );
+                    }
+                    _endSession(session);
+                  }
+                  break;
+                case ChatResponseType.toolCall:
+                  if (response.toolCall case final call?) {
+                    collectedToolCalls.add(call);
+                  }
+                  break;
+                case ChatResponseType.done:
+                  if (response.stats != null) {
+                    session.stats = response.stats;
+                  }
+                  break;
+                default:
+                  break;
+              }
+            },
+            onDone: () async {
+              session.cancelUiTimer();
+              if (streamHadError) {
+                // The error branch already finalised the message and
+                // stopped streaming — do not overwrite the error state
+                // with a successful complete message.
+                return;
+              }
+              final streamConvId = assistantMessage.conversationId;
+              final isCurrentContext = _activeConversationId == streamConvId;
+
+              final hasReply = _hasReplyContent(streamingAssistantMessage);
+              final hasCalls = toolsEnabled && collectedToolCalls.isNotEmpty;
+              final completed = hasReply || hasCalls;
+              var finalMessage = _finalizeStreamMessage(
+                streamingAssistantMessage.copyWith(
+                  status: completed
+                      ? MessageStatus.complete
+                      : MessageStatus.error,
+                  errorMessage: completed
+                      ? null
+                      : 'The model returned an empty reply. Try regenerating the response.',
+                  isProcessing: false,
+                ),
+                stopReason: completed ? 'complete' : 'error',
+                session: session,
+              );
+              if (hasCalls) {
+                final lastUser = messagesForApi.reversed
+                    .where((message) => message.role == MessageRole.user)
+                    .firstOrNull;
+                final toolReply = await _finishToolTurn(
+                  session,
+                  finalMessage,
+                  collectedToolCalls,
+                  selectedModel,
+                  effectiveModelId,
+                  lastUser?.content ?? '',
+                );
+                if (toolReply == null) return;
+                finalMessage = toolReply;
+              }
+              await _saveMessage(finalMessage, persist: session.persisted);
+              if (!ref.mounted) return;
+              if (isCurrentContext) {
+                _replaceMessageInAll(finalMessage, clearStreaming: true);
+                state = state.copyWith(
+                  isStreaming: false,
+                  clearStreaming: true,
+                );
+                _maybeAutoGenerateTitleAfterFirstReply();
+              }
+              if (ref.mounted) {
+                _endSession(session);
+              }
+              await _syncConversationStatsAfterGeneration(
+                streamConvId,
+                finalMessage,
+                isCurrentContext: isCurrentContext,
+              );
+              if (!ref.mounted) return;
+              if (finalMessage.status == MessageStatus.error) {
+                if (isCurrentContext) {
+                  state = state.copyWith(clearLiveGeneration: true);
+                }
+                return;
+              }
+              if (isCurrentContext) {
+                _completeLiveGeneration(session, finalMessage);
+              }
+              await _maybeCountPrompt(session, streamConvId);
+              _maybeRequestReviewAfterSuccessfulCompletion(
+                finalMessage: finalMessage,
+                server: server,
+                selectedModel: selectedModel,
+              );
+
+              // Auto-speak: read the response aloud if the setting is
+              // enabled and voice mode is not already handling TTS.
+              if (ref.mounted) {
+                final autoSpeak = ref.read(settingsProvider).autoSpeakEnabled;
+                final voiceActive =
+                    ref.read(voiceModeProvider).phase != VoiceModePhase.idle;
+                // Don't read a background reply aloud over another chat.
+                if (autoSpeak &&
+                    !voiceActive &&
+                    _activeConversationId == finalMessage.conversationId &&
+                    finalMessage.content.trim().isNotEmpty) {
+                  ref
+                      .read(ttsProvider.notifier)
+                      .speak(
+                        finalMessage.content,
+                        messageId: finalMessage.id,
+                        conversationId: finalMessage.conversationId,
+                      );
+                }
+              }
+            },
+            onError: (Object error, StackTrace stackTrace) async {
+              Log.error('Stream error: $error');
+              session.cancelUiTimer();
+              final isCurrentContext =
+                  _activeConversationId == assistantMessage.conversationId;
+              final errorMessage = streamingAssistantMessage.copyWith(
+                status: MessageStatus.error,
+                errorMessage: error.toString(),
+                isProcessing: false,
+              );
+              await _saveMessage(errorMessage, persist: session.persisted);
+              if (!ref.mounted) return;
+              if (isCurrentContext) {
+                _replaceMessageInAll(errorMessage, clearStreaming: true);
+                state = state.copyWith(
+                  isStreaming: false,
+                  clearStreaming: true,
+                  errorMessage: error.toString(),
+                  clearLiveGeneration: true,
+                );
+              }
+              if (ref.mounted) {
+                _endSession(session);
+              }
+            },
+          );
+    } catch (e) {
+      if (!ref.mounted) return;
+      state = state.copyWith(
+        isStreaming: false,
+        errorMessage: e.toString(),
+        clearStreaming: true,
+        clearLiveGeneration: true,
+      );
+      _endSession(session);
+    }
+  }
+
+  void _replaceMessageInAll(Message message, {bool clearStreaming = false}) {
+    if (!ref.mounted) return;
+    final updatedAll = state.allMessages.map((m) {
+      return m.id == message.id ? message : m;
+    }).toList();
+    state = state.copyWith(
+      allMessages: updatedAll,
+      messages: MessageVariants.resolveActiveTimeline(updatedAll),
+      streamingMessage: clearStreaming ? null : message,
+      clearStreaming: clearStreaming,
+    );
+  }
+
+  Future<void> editAssistantMessage(String messageId, String newContent) async {
+    final messageIndex = state.messages.indexWhere((m) => m.id == messageId);
+    if (messageIndex == -1) return;
+
+    final message = state.messages[messageIndex];
+    if (message.role != MessageRole.assistant) return;
+    if (newContent.trim().isEmpty) return;
+    if (newContent == message.content) return;
+
+    final updated = message.copyWith(
+      content: newContent,
+      status: MessageStatus.complete,
+    );
+    await _saveMessage(updated);
+    _replaceMessageInAll(updated);
+  }
+
+  Future<void> branchFromMessage(String messageId) async {
+    final messageIndex = state.messages.indexWhere((m) => m.id == messageId);
+    if (messageIndex == -1) return;
+
+    final activeConv = ref.read(conv.activeConversationProvider);
+    if (activeConv == null) return;
+
+    final messagesToCopy = state.messages.sublist(0, messageIndex + 1);
+    final branchTitle = activeConv.title.length > 40
+        ? '${activeConv.title.substring(0, 40)}...'
+        : activeConv.title;
+
+    final newConversation = await ref
+        .read(conv.conversationsProvider.notifier)
+        .createConversation(
+          title: '$branchTitle (branch)',
+          personaId: activeConv.personaId,
+          systemPrompt: activeConv.systemPrompt,
+          serverId: activeConv.serverId,
+          modelId: activeConv.modelId,
+          mcpEnabled: activeConv.mcpEnabled,
+        );
+
+    if (activeConv.temperature != null ||
+        activeConv.topP != null ||
+        activeConv.maxTokens != null ||
+        activeConv.contextLength != null) {
+      await ref
+          .read(conv.conversationsProvider.notifier)
+          .updateChatParams(
+            newConversation.id,
+            temperature: activeConv.temperature,
+            topP: activeConv.topP,
+            maxTokens: activeConv.maxTokens,
+            contextLength: activeConv.contextLength,
+          );
+    }
+
+    for (final msg in messagesToCopy) {
+      final copied = msg.copyWith(
+        id: generateUuid(),
+        conversationId: newConversation.id,
+      );
+      await _saveMessage(copied);
+    }
+
+    final lastMessage = messagesToCopy.last;
+    final preview = lastMessage.content.length > 100
+        ? '${lastMessage.content.substring(0, 100)}...'
+        : lastMessage.content;
+
+    await ref
+        .read(conv.conversationsProvider.notifier)
+        .updatePreview(
+          newConversation.id,
+          preview,
+          DateTime.now(),
+          messageCount: messagesToCopy.length,
+          characterCount: messagesToCopy.fold<int>(
+            0,
+            (sum, message) => sum + message.content.length,
+          ),
+        );
+
+    final refreshedConversations = ref.read(conv.conversationsProvider).value;
+    final branchedConversation = refreshedConversations?.firstWhere(
+      (c) => c.id == newConversation.id,
+      orElse: () => newConversation,
+    );
+
+    if (branchedConversation != null) {
+      await loadConversation(branchedConversation);
+    }
+  }
+
+  Future<void> deleteMessage(String messageId) async {
+    final session = _activeSession;
+    if (session?.isImageGeneration == true &&
+        session?.latestMessage?.id == messageId) {
+      await cancelGenerationFor(session!.conversationId);
+      if (!ref.mounted) return;
+    }
+    final db = ref.read(databaseProvider);
+    final query = db.messageBox
+        .query(MessageEntity_.id.equals(messageId))
+        .build();
+    final paths =
+        query.findFirst()?.toDomain().attachmentPaths ?? const <String>[];
+    db.messageBox.removeMany(query.findIds());
+    query.close();
+    unawaited(GeneratedImageFiles.prune(db.messageBox, paths));
+
+    final updatedAll = state.allMessages
+        .where((m) => m.id != messageId)
+        .toList();
+    state = state.copyWith(
+      allMessages: updatedAll,
+      messages: MessageVariants.resolveActiveTimeline(updatedAll),
+    );
+
+    if (_currentConversationId != null) {
+      _recomputeConversationTotal(_currentConversationId!);
+    }
+  }
+
+  Future<void> editMessageSaveOnly(String messageId, String newContent) async {
+    final messageIndex = state.messages.indexWhere((m) => m.id == messageId);
+    if (messageIndex == -1) return;
+
+    final message = state.messages[messageIndex];
+    if (message.role != MessageRole.user) return;
+    if (newContent.trim().isEmpty) return;
+    if (newContent == message.content) return;
+
+    final updated = message.copyWith(content: newContent);
+    await _saveMessage(updated);
+    _replaceMessageInAll(updated);
+  }
+
+  Future<void> generateResponseForLastUser() async {
+    if (_blockIfOnDeviceBusy()) return;
+    if (state.isStreaming || _isRegenerating) return;
+    _isRegenerating = true;
+    try {
+      final messages = state.messages;
+      if (messages.isEmpty || messages.last.role != MessageRole.user) return;
+
+      final userMessage = messages.last;
+      await _regenerateAssistant(
+        userMessage,
+        variantGroupId: generateUuid(),
+        threadOrder: userMessage.threadOrder + 1,
+        variantIndex: 0,
+      );
+    } finally {
+      _isRegenerating = false;
+    }
+  }
+
+  Future<void> generateAiUserMessage() async {
+    if (_blockIfOnDeviceBusy()) return;
+    if (state.isStreaming) return;
+    if (state.messages.isEmpty) return;
+
+    final target = ref.read(activeChatTargetProvider);
+    if (target.isImageGeneration) return;
+    final server = target.server;
+    final modelId = target.effectiveModelId;
+    final chatService = ref.read(chatServiceProvider);
+    if (server == null || chatService == null || modelId == null) return;
+
+    final generated = await ref
+        .read(smartReplyServiceProvider)
+        .generateUserMessage(
+          chatService: chatService,
+          server: server,
+          modelId: modelId,
+          messages: state.messages,
+          params: ref.read(chatParamsProvider),
+        );
+
+    if (generated == null || generated.trim().isEmpty) return;
+    await sendMessage(generated.trim(), countsAsPrompt: false);
+  }
+
+  Future<void> saveTemporaryChatToHistory() async {
+    if (!state.isTemporary || state.messages.isEmpty) return;
+
+    final server = ref.read(activeServerProvider);
+    if (server == null) return;
+
+    final settings = ref.read(settingsProvider);
+    final firstUser = state.messages
+        .where((m) => m.role == MessageRole.user)
+        .map((m) => m.content.trim())
+        .firstWhere((c) => c.isNotEmpty, orElse: () => '');
+
+    final title = settings.autoGenerateTitle
+        ? 'New Chat'
+        : ref
+              .read(titleGenerationServiceProvider)
+              .truncateFirstMessageTitle(
+                firstUser.isNotEmpty ? firstUser : 'New Chat',
+              );
+
+    final preselected = ref.read(selectedPersonasProvider);
+    final conversation = await ref
+        .read(conv.conversationsProvider.notifier)
+        .createConversation(
+          title: title,
+          serverId: server.id,
+          modelId: ref.read(selectedModelProvider)?.id,
+          personaId: preselected.isEmpty
+              ? null
+              : PersonaPromptUtils.joinPersonaIds(
+                  preselected.map((p) => p.id).toList(),
+                ),
+          systemPrompt: preselected.isEmpty
+              ? null
+              : PersonaPromptUtils.combineSystemPrompts(preselected),
+          mcpEnabled: settings.mcpEnabled && settings.newChatMcpEnabled,
+          isTemporary: false,
+        );
+
+    _currentConversationId = conversation.id;
+    _ephemeralConversationId = null;
+    state = state.copyWith(isTemporary: false);
+    ref
+        .read(conv.activeConversationIdProvider.notifier)
+        .setActiveConversation(conversation);
+
+    final updatedAll = state.allMessages
+        .map((m) => m.copyWith(conversationId: conversation.id))
+        .toList();
+    _setAllMessages(updatedAll);
+
+    for (final message in updatedAll) {
+      await _saveMessage(message);
+    }
+  }
+
+  Future<void> editMessage(String messageId, String newContent) async {
+    if (_blockIfOnDeviceBusy()) return;
+    final messageIndex = state.messages.indexWhere((m) => m.id == messageId);
+    if (messageIndex == -1) return;
+
+    final message = state.messages[messageIndex];
+    if (message.role != MessageRole.user) return;
+    if (newContent.trim().isEmpty) return;
+    if (newContent == message.content) return;
+
+    if (ref.read(activeChatTargetProvider).isImageGeneration &&
+        !_canGenerateImage(
+          newContent,
+          hasAttachments: message.attachmentPaths?.isNotEmpty == true,
+        )) {
+      return;
+    }
+
+    final groupId = MessageVariants.groupId(message);
+    final deactivated = state.allMessages.map((m) {
+      if (MessageVariants.groupId(m) != groupId) return m;
+      return m.copyWith(isActiveVariant: false);
+    }).toList();
+    for (final m in deactivated.where(
+      (x) => MessageVariants.groupId(x) == groupId,
+    )) {
+      await _saveMessage(m);
+    }
+    state = state.copyWith(allMessages: deactivated);
+
+    final newUser = message.copyWith(
+      id: generateUuid(),
+      content: newContent,
+      createdAt: DateTime.now(),
+      variantIndex: _nextVariantIndex(groupId),
+      isActiveVariant: true,
+      parentMessageId: message.parentMessageId,
+    );
+    await _saveMessage(newUser);
+    final updatedAll = [...state.allMessages, newUser];
+    _setAllMessages(updatedAll);
+
+    await _regenerateAssistant(
+      newUser,
+      variantGroupId: generateUuid(),
+      threadOrder: message.threadOrder + 1,
+      variantIndex: 0,
+    );
+  }
+
+  /// Saves [message] unless it belongs to an in-memory (temporary) chat.
+  /// A reply's own saves pass [persist] from its [GenerationSession], because
+  /// the open chat may no longer be the chat the reply belongs to.
+  Future<void> _saveMessage(Message message, {bool? persist}) async {
+    // Check `ref.mounted` before touching `state` (via `_isInMemoryChat`).
+    // On a disposed notifier, accessing `state` throws "Cannot use the Ref of
+    // NotifierProvider ... after it has been disposed" — see issue #73.
+    if (!ref.mounted) return;
+    if (persist == false) return;
+    if (persist == null && _isInMemoryChat) return;
+    await persistMessage(message);
+  }
+
+  /// Reads a conversation's messages from ObjectBox. Overridden in tests.
+  @protected
+  @visibleForTesting
+  Future<List<Message>> loadConversationMessages(String conversationId) async {
+    final db = ref.read(databaseProvider);
+    final messages = await db.store.runInTransactionAsync(
+      TxMode.read,
+      _loadMessagesInBackground,
+      conversationId,
+    );
+    bool hasGeneratedImage(Message message) =>
+        message.attachmentPaths?.any(GeneratedImageFiles.isStoredPath) ?? false;
+
+    if (!ref.mounted || !messages.any(hasGeneratedImage)) return messages;
+    try {
+      final files = GeneratedImageFiles(
+        await ref.read(storageDirectoryProvider.future),
+      );
+      return [
+        for (final message in messages)
+          if (hasGeneratedImage(message))
+            message.copyWith(
+              attachmentPaths: message.attachmentPaths!
+                  .map(files.resolvePath)
+                  .toList(),
+            )
+          else
+            message,
+      ];
+    } catch (_) {
+      return messages;
+    }
+  }
+
+  /// Writes a message to ObjectBox. Overridden in tests.
+  @protected
+  @visibleForTesting
+  Future<void> persistMessage(Message message) async {
+    final db = ref.read(databaseProvider);
+    await db.store.runInTransactionAsync(
+      TxMode.write,
+      _saveMessageInBackground,
+      message,
+    );
+  }
+
+  /// Test-only hook that exposes [_saveMessage] so we can verify it is safe
+  /// to call on a disposed notifier (issue #73).
+  @visibleForTesting
+  Future<void> debugSaveMessageForTest(Message message) =>
+      _saveMessage(message);
+
+  static void _saveMessageInBackground(Store store, Message message) {
+    final box = store.box<MessageEntity>();
+    final convBox = store.box<ConversationEntity>();
+
+    final query = box.query(MessageEntity_.id.equals(message.id)).build();
+    final existing = query.findFirst();
+    query.close();
+
+    final entity = MessageEntity.fromDomain(message);
+    if (existing != null) {
+      entity.internalId = existing.internalId;
+    }
+
+    final convQuery = convBox
+        .query(ConversationEntity_.id.equals(message.conversationId))
+        .build();
+    final convEntity = convQuery.findFirst();
+    convQuery.close();
+
+    if (convEntity != null) {
+      entity.conversation.target = convEntity;
+      entity.conversationUid = convEntity.id;
+    } else {
+      entity.conversationUid = message.conversationId;
+    }
+
+    box.put(entity);
+  }
+
+  Future<void> clearConversation() async {
+    if (_activeSession?.isImageGeneration == true) {
+      await cancelStream();
+      if (!ref.mounted) return;
+    }
+    await _saveService?.flush();
+    if (!ref.mounted) return;
+    final db = ref.read(databaseProvider);
+    if (_currentConversationId != null && !_isInMemoryChat) {
+      final query = db.messageBox
+          .query(MessageEntity_.conversationUid.equals(_currentConversationId!))
+          .build();
+      final paths = query
+          .find()
+          .expand(
+            (entity) => entity.toDomain().attachmentPaths ?? const <String>[],
+          )
+          .toList();
+      db.messageBox.removeMany(query.findIds());
+      query.close();
+      unawaited(GeneratedImageFiles.prune(db.messageBox, paths));
+    }
+    _currentConversationId = null;
+    _ephemeralConversationId = null;
+    _pendingTemporaryChat = false;
+    state = const ChatState();
+    ref
+        .read(conv.activeConversationIdProvider.notifier)
+        .setActiveConversation(null);
+  }
+
+  void clearError() {
+    state = state.copyWith(clearError: true);
+  }
+}
+
+final hasActiveChatSessionProvider = Provider<bool>((ref) {
+  final chat = ref.watch(chatProvider);
+  final activeConv = ref.watch(conv.activeConversationProvider);
+  return chat.messages.isNotEmpty || chat.isStreaming || activeConv != null;
+});

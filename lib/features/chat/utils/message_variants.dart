@@ -1,0 +1,200 @@
+import '../../../core/models/enums.dart';
+import '../data/models/message.dart';
+
+class MessageVariants {
+  static String groupId(Message message) =>
+      message.variantGroupId?.isNotEmpty == true
+      ? message.variantGroupId!
+      : message.id;
+
+  static List<Message> resolveActiveTimeline(List<Message> allMessages) {
+    if (allMessages.isEmpty) return [];
+
+    final normalized = allMessages.map(_normalizeLegacy).toList();
+    final withParents = ensureParentLinks(normalized);
+
+    final childrenOf = <String, List<Message>>{};
+    final roots = <Message>[];
+    for (final message in withParents) {
+      final parentId = message.parentMessageId;
+      if (parentId == null || parentId.isEmpty) {
+        roots.add(message);
+      } else {
+        childrenOf.putIfAbsent(parentId, () => []).add(message);
+      }
+    }
+
+    if (roots.isEmpty) {
+      return _legacyFlatResolve(normalized);
+    }
+
+    roots.sort((a, b) {
+      final order = a.threadOrder.compareTo(b.threadOrder);
+      if (order != 0) return order;
+      return a.createdAt.compareTo(b.createdAt);
+    });
+
+    final timeline = <Message>[];
+    var current = _pickActiveSibling(roots);
+    var legacyReplies = <Message>[];
+    while (true) {
+      timeline.add(current);
+      final children = childrenOf[current.id] ?? legacyReplies;
+      legacyReplies = [];
+      if (children.isEmpty) break;
+
+      final replies = <Message>[];
+      for (final child in children) {
+        if (child.role == MessageRole.tool) {
+          // Results belong to the tool-call turn and can arrive in parallel.
+          timeline.add(child);
+          legacyReplies.addAll(childrenOf[child.id] ?? const []);
+        } else {
+          replies.add(child);
+        }
+      }
+      // Older versions could attach the next user turn to a tool result.
+      // Preserve that continuation if the actual reply has no children.
+      if (replies.isEmpty) {
+        if (legacyReplies.isEmpty) break;
+        current = _pickActiveSibling(legacyReplies);
+        legacyReplies = [];
+      } else {
+        current = _pickActiveSibling(replies);
+      }
+    }
+    return timeline;
+  }
+
+  static List<Message> _legacyFlatResolve(List<Message> normalized) {
+    final byGroup = <String, List<Message>>{};
+    for (final message in normalized) {
+      byGroup.putIfAbsent(groupId(message), () => []).add(message);
+    }
+
+    final active = <Message>[];
+    for (final group in byGroup.values) {
+      group.sort((a, b) => a.variantIndex.compareTo(b.variantIndex));
+      final selected = group.firstWhere(
+        (m) => m.isActiveVariant,
+        orElse: () => group.last,
+      );
+      active.add(selected);
+    }
+
+    active.sort((a, b) {
+      final orderCompare = a.threadOrder.compareTo(b.threadOrder);
+      if (orderCompare != 0) return orderCompare;
+      return a.createdAt.compareTo(b.createdAt);
+    });
+    return active;
+  }
+
+  static List<Message> ensureParentLinks(List<Message> messages) {
+    // A legacy chat may have gained linked replies after it was opened.
+    // Its older prefix still needs to be linked when read from storage.
+    int? firstLinkedOrder;
+    for (final message in messages) {
+      if (message.parentMessageId?.isNotEmpty == true &&
+          (firstLinkedOrder == null ||
+              message.threadOrder < firstLinkedOrder)) {
+        firstLinkedOrder = message.threadOrder;
+      }
+    }
+    final byThreadOrder = <int, List<Message>>{};
+    for (final message in messages) {
+      if (firstLinkedOrder != null && message.threadOrder >= firstLinkedOrder) {
+        continue;
+      }
+      byThreadOrder.putIfAbsent(message.threadOrder, () => []).add(message);
+    }
+    if (byThreadOrder.length < 2) return messages;
+
+    final orders = byThreadOrder.keys.toList()..sort();
+
+    String? previousActiveId;
+    final parents = <String, String>{};
+    for (final order in orders) {
+      final group = byThreadOrder[order]!;
+      if (previousActiveId != null) {
+        for (final message in group) {
+          parents[message.id] = previousActiveId;
+        }
+      }
+      final active = group.firstWhere(
+        (m) => m.isActiveVariant,
+        orElse: () => group.last,
+      );
+      previousActiveId = active.id;
+    }
+    return messages
+        .map(
+          (message) => message.copyWith(parentMessageId: parents[message.id]),
+        )
+        .toList();
+  }
+
+  static Message _pickActiveSibling(List<Message> siblings) {
+    final byGroup = <String, List<Message>>{};
+    for (final message in siblings) {
+      byGroup.putIfAbsent(groupId(message), () => []).add(message);
+    }
+
+    if (byGroup.length == 1) {
+      final group = byGroup.values.first;
+      group.sort((a, b) => a.variantIndex.compareTo(b.variantIndex));
+      return group.firstWhere(
+        (m) => m.isActiveVariant,
+        orElse: () => group.last,
+      );
+    }
+
+    siblings.sort((a, b) {
+      final order = a.threadOrder.compareTo(b.threadOrder);
+      if (order != 0) return order;
+      return a.createdAt.compareTo(b.createdAt);
+    });
+    return siblings.firstWhere(
+      (m) => m.isActiveVariant,
+      orElse: () => siblings.first,
+    );
+  }
+
+  static List<Message> variantsForMessage(
+    List<Message> allMessages,
+    Message message,
+  ) {
+    final gid = groupId(message);
+    return allMessages
+        .where(
+          (m) =>
+              groupId(m) == gid &&
+              m.role == message.role &&
+              m.parentMessageId == message.parentMessageId,
+        )
+        .toList()
+      ..sort((a, b) => a.variantIndex.compareTo(b.variantIndex));
+  }
+
+  static int activeVariantIndex(List<Message> variants) {
+    final index = variants.indexWhere((m) => m.isActiveVariant);
+    return index >= 0 ? index : variants.length - 1;
+  }
+
+  static Message _normalizeLegacy(Message message) {
+    if (message.variantGroupId?.isNotEmpty == true) return message;
+    return message.copyWith(
+      variantGroupId: message.id,
+      variantIndex: 0,
+      isActiveVariant: true,
+    );
+  }
+
+  static int nextThreadOrder(List<Message> activeTimeline) {
+    if (activeTimeline.isEmpty) return 0;
+    return activeTimeline
+            .map((m) => m.threadOrder)
+            .reduce((a, b) => a > b ? a : b) +
+        1;
+  }
+}

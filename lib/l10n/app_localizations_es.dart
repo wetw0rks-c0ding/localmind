@@ -1,0 +1,3579 @@
+// ignore: unused_import
+import 'package:intl/intl.dart' as intl;
+import 'app_localizations.dart';
+
+// ignore_for_file: type=lint
+
+/// The translations for Spanish Castilian (`es`).
+class AppLocalizationsEs extends AppLocalizations {
+  AppLocalizationsEs([String locale = 'es']) : super(locale);
+
+  @override
+  String get app_name => 'LocalMind';
+
+  @override
+  String get app_tagline => 'Su IA. Su dispositivo. Sus normas.';
+
+  @override
+  String get app_version => '1.0.0';
+
+  @override
+  String get cancel => 'Cancelar';
+
+  @override
+  String get confirm => 'Confirmar';
+
+  @override
+  String get delete => 'Eliminar';
+
+  @override
+  String get save => 'Guardar';
+
+  @override
+  String get retry => 'Reintentar';
+
+  @override
+  String get close => 'Cerrar';
+
+  @override
+  String get done => 'Listo';
+
+  @override
+  String get continue_action => 'Continuar';
+
+  @override
+  String get skip => 'Omitir';
+
+  @override
+  String get install => 'Instalar';
+
+  @override
+  String get download => 'Descargar';
+
+  @override
+  String get resume => 'Reanudar';
+
+  @override
+  String get pause => 'Pausar';
+
+  @override
+  String get stop => 'Detener';
+
+  @override
+  String get edit => 'Editar';
+
+  @override
+  String get preview => 'Vista previa';
+
+  @override
+  String get unload => 'Liberar de memoria';
+
+  @override
+  String get load => 'Cargar';
+
+  @override
+  String get rename => 'Renombrar';
+
+  @override
+  String get pin => 'Fijar';
+
+  @override
+  String get unpin => 'Desfijar';
+
+  @override
+  String get share => 'Compartir';
+
+  @override
+  String get copy => 'Copiar';
+
+  @override
+  String get copied => '¡Copiado!';
+
+  @override
+  String get copied_to_clipboard => 'Copiado al portapapeles';
+
+  @override
+  String get select => 'Seleccionar';
+
+  @override
+  String get active => 'Activo';
+
+  @override
+  String get all => 'Todo';
+
+  @override
+  String get none => 'Ninguno';
+
+  @override
+  String get none_selected => 'Ninguno seleccionado';
+
+  @override
+  String get online => 'En línea';
+
+  @override
+  String get connected => 'Conectado';
+
+  @override
+  String get checking => 'Comprobando';
+
+  @override
+  String get offline => 'Sin conexión';
+
+  @override
+  String get error => 'Error';
+
+  @override
+  String get unknown_error => 'Error desconocido';
+
+  @override
+  String get not_now => 'Ahora no';
+
+  @override
+  String get enable => 'Habilitar';
+
+  @override
+  String get proceed_anyway => 'Proceder de todos modos';
+
+  @override
+  String get test_connection => 'Probar conexión';
+
+  @override
+  String get testing => 'Probando...';
+
+  @override
+  String get connection_successful => '¡Conexión exitosa!';
+
+  @override
+  String get connection_failed => 'Conexión fallida. Compruebe sus ajustes.';
+
+  @override
+  String get save_continue => 'Guardar y continuar';
+
+  @override
+  String get save_changes => 'Guardar cambios';
+
+  @override
+  String get finish_setup => 'Finalizar configuración';
+
+  @override
+  String get start_new_chat => 'Comenzar nuevo chat';
+
+  @override
+  String get cannot_undo => 'Esta acción no se puede deshacer.';
+
+  @override
+  String get ram_warning => 'Advertencia de RAM';
+
+  @override
+  String get recommended => 'RECOMENDADO';
+
+  @override
+  String get may_be_large => 'Puede ser demasiado grande para este dispositivo';
+
+  @override
+  String get calculating => 'Calculando...';
+
+  @override
+  String get download_failed => 'Descarga fallida';
+
+  @override
+  String get downloaded => 'Descargado';
+
+  @override
+  String get not_downloaded => 'No descargado';
+
+  @override
+  String get installed => 'Instalado';
+
+  @override
+  String get not_installed => 'No instalado';
+
+  @override
+  String get loading => 'Cargando...';
+
+  @override
+  String get thinking => 'Pensando';
+
+  @override
+  String get processing => 'Procesando...';
+
+  @override
+  String get initializing => 'Inicializando...';
+
+  @override
+  String get ready => 'Listo';
+
+  @override
+  String get preparing_app => 'Preparando aplicación...';
+
+  @override
+  String get initializing_services => 'Inicializando servicios...';
+
+  @override
+  String get configuring_server => 'Configurando servidor...';
+
+  @override
+  String get startup_failed => 'Fallo en el inicio';
+
+  @override
+  String get something_went_wrong => 'Algo salió mal';
+
+  @override
+  String get delete_model_title => 'Eliminar modelo';
+
+  @override
+  String delete_model_body(String name) {
+    return '¿Está seguro de que desea eliminar $name?';
+  }
+
+  @override
+  String delete_model_body_with_size(String name, String size) {
+    return '¿Está seguro de que desea eliminar $name? Esto liberará aproximadamente $size de espacio.\n\nPuede volver a descargar este modelo más tarde si es necesario.';
+  }
+
+  @override
+  String get delete_voice_title => 'Eliminar voz';
+
+  @override
+  String delete_voice_body(String name, String size) {
+    return '¿Está seguro de que desea eliminar $name? Esto liberará aproximadamente $size de espacio.\n\nPuede volver a descargar esta voz más tarde si es necesario.';
+  }
+
+  @override
+  String get delete_server_title => 'Eliminar servidor';
+
+  @override
+  String delete_server_body(String name) {
+    return '¿Está seguro de que desea eliminar \"$name\"? Esto no se puede deshacer.';
+  }
+
+  @override
+  String get delete_conversation_title => '¿Eliminar conversación?';
+
+  @override
+  String delete_conversation_body(String title) {
+    return '¿Está seguro de que desea eliminar \"$title\"? Esto no se puede deshacer.';
+  }
+
+  @override
+  String get delete_message_title => '¿Eliminar mensaje?';
+
+  @override
+  String delete_persona_title(String name) {
+    return '¿Eliminar \"$name\"?';
+  }
+
+  @override
+  String get delete_persona_body => 'Esto no se puede deshacer.';
+
+  @override
+  String get delete_builtin_persona_body =>
+      'Este es un personaje incorporado. Puedes restaurarlo más tarde desde Configuración.';
+
+  @override
+  String get restore_builtin_personas => 'Restaurar personajes predeterminados';
+
+  @override
+  String get restore_builtin_personas_desc =>
+      'Vuelve a añadir cualquier personaje incorporado que hayas eliminado';
+
+  @override
+  String get restore_builtin_personas_success =>
+      'Personajes predeterminados restaurados';
+
+  @override
+  String get clear_personas => 'Limpiar personajes';
+
+  @override
+  String get enable_image_compression => 'Comprimir imágenes antes de enviar';
+
+  @override
+  String get enable_image_compression_desc =>
+      'Redimensionar y comprimir imágenes adjuntas para que las cargas se mantengan dentro de los límites del servidor';
+
+  @override
+  String get image_compression_level => 'Agresividad de la compresión';
+
+  @override
+  String get image_compression_level_desc =>
+      'Una mayor agresividad produce cargas más pequeñas a menor calidad';
+
+  @override
+  String get image_compression_level_low => 'Baja';
+
+  @override
+  String get image_compression_level_medium => 'Media';
+
+  @override
+  String get image_compression_level_high => 'Alta';
+
+  @override
+  String get sort_models_tooltip => 'Ordenar modelos';
+
+  @override
+  String get sort_by_favorites => 'Favoritos primero';
+
+  @override
+  String get sort_by_name => 'Nombre (A-Z)';
+
+  @override
+  String get sort_by_size_smallest => 'Tamaño (más pequeño primero)';
+
+  @override
+  String get sort_by_size_largest => 'Tamaño (más grande primero)';
+
+  @override
+  String get sort_by_context_length => 'Longitud de contexto';
+
+  @override
+  String bulk_ai_rename_progress(int done, int total) {
+    return 'Renombrando $done/$total...';
+  }
+
+  @override
+  String selected_count(int count) {
+    return '$count seleccionados';
+  }
+
+  @override
+  String get ai_rename_tooltip => 'Renombrar seleccionados con IA';
+
+  @override
+  String get new_chat_in_folder_tooltip => 'Nuevo chat en esta carpeta';
+
+  @override
+  String total_tokens_count(int count) {
+    return '$count tokens';
+  }
+
+  @override
+  String get smart_replies_use_persona =>
+      'Usar personaje en respuestas inteligentes';
+
+  @override
+  String get smart_replies_use_persona_desc =>
+      'Las respuestas sugeridas coinciden con el tono del personaje activo en lugar de un asistente genérico';
+
+  @override
+  String get keep_persona_on_new_chat =>
+      'Mantener personaje al iniciar chat nuevo';
+
+  @override
+  String get keep_persona_on_new_chat_desc =>
+      'No limpiar la selección de personaje al comenzar un nuevo chat';
+
+  @override
+  String get role_swap_button_enabled => 'Mostrar botón de cambio de rol';
+
+  @override
+  String get role_swap_button_enabled_desc =>
+      'Mostrar un botón en la entrada de chat para enviar tu mensaje con el rol de asistente en lugar de usuario, sin generar respuesta';
+
+  @override
+  String get processing_prompt_label => 'Processing prompt…';
+
+  @override
+  String get generating_label => 'Generating…';
+
+  @override
+  String get prompts_processed_label => 'Prompts processed';
+
+  @override
+  String get prompt_processing_indicator_enabled =>
+      'Show prompt processing indicator';
+
+  @override
+  String get prompt_processing_indicator_enabled_desc =>
+      'Show live prompt-processing progress and the per-chat prompts-processed count above the chat input.';
+
+  @override
+  String get send_as_user_tooltip => 'Enviar como usuario';
+
+  @override
+  String get send_as_assistant_tooltip =>
+      'Enviar como asistente (sin respuesta)';
+
+  @override
+  String get insert_without_generating_tooltip => 'Insertar sin generar';
+
+  @override
+  String get token_usage_title => 'Uso de Tokens';
+
+  @override
+  String get total_tokens_label => 'Tokens usados';
+
+  @override
+  String get usage_percent_label => 'Contexto usado';
+
+  @override
+  String get export_choice_title => 'Exportar';
+
+  @override
+  String get export_choice_body => '¿Cómo te gustaría exportar esto?';
+
+  @override
+  String get copy_to_clipboard => 'Copiar al portapapeles';
+
+  @override
+  String bulk_export_conversations_success(int count) {
+    return 'Exportado $count conversaciones';
+  }
+
+  @override
+  String get bulk_ai_rename_confirm_title => '¿Renombrar con IA?';
+
+  @override
+  String bulk_ai_rename_confirm_body(int count) {
+    return 'Esto le pedirá a la IA que genere un nuevo título para cada una de las $count conversaciones seleccionadas, reemplazando sus títulos actuales. Esto puede tardar un poco y no se puede deshacer.';
+  }
+
+  @override
+  String get sort_by_modified_date => 'Última modificación';
+
+  @override
+  String get sort_by_created_date => 'Fecha de creación';
+
+  @override
+  String get sort_title => 'Ordenar';
+
+  @override
+  String get clear_conversation_title => '¿Limpiar conversación?';
+
+  @override
+  String get clear_conversation_body =>
+      'Esto eliminará todos los mensajes de esta conversación.';
+
+  @override
+  String get clear => 'Limpiar';
+
+  @override
+  String label_completed(String label) {
+    return '$label completado';
+  }
+
+  @override
+  String error_with_message(String error) {
+    return 'Error: $error';
+  }
+
+  @override
+  String preview_failed(String error) {
+    return 'Vista previa fallida: $error';
+  }
+
+  @override
+  String loading_model(String modelId) {
+    return 'Cargando $modelId...';
+  }
+
+  @override
+  String model_loaded(String modelId, String backend) {
+    return 'Modelo cargado: $modelId ($backend)';
+  }
+
+  @override
+  String get no_model_loaded =>
+      'Ningún modelo cargado. Toque \"Gestionar modelos locales\" para descargar y cargar un modelo.';
+
+  @override
+  String loading_model_error(String error) {
+    return 'Error: $error';
+  }
+
+  @override
+  String get delete_conversation => '¿Eliminar conversación?';
+
+  @override
+  String get nav_history => 'Historial';
+
+  @override
+  String get nav_servers => 'Servidores';
+
+  @override
+  String get nav_local_models => 'Modelos locales';
+
+  @override
+  String get nav_tts => 'Texto a voz';
+
+  @override
+  String get nav_personas => 'Personajes';
+
+  @override
+  String get nav_settings => 'Ajustes';
+
+  @override
+  String get nav_new_chat => 'Nuevo chat';
+
+  @override
+  String get search_hint => 'Buscar conversaciones...';
+
+  @override
+  String get no_server_selected => 'Ningún servidor seleccionado';
+
+  @override
+  String get switch_server => 'Cambiar de servidor';
+
+  @override
+  String get switch_server_subtitle => 'Elija un servidor al que conectarse';
+
+  @override
+  String get manage_servers => 'Gestionar servidores';
+
+  @override
+  String get open_source => 'Código abierto';
+
+  @override
+  String get open_source_desc =>
+      'LocalMind es de código abierto. Siga nuestro progreso o contribuya en GitHub.';
+
+  @override
+  String get star_on_github => 'Dar estrella en GitHub';
+
+  @override
+  String get add_more => 'Añadir más';
+
+  @override
+  String get on_github => 'en GitHub';
+
+  @override
+  String get could_not_open_github => 'No se pudo abrir GitHub.';
+
+  @override
+  String get settings_title => 'Ajustes';
+
+  @override
+  String get settings_appearance => 'Apariencia';
+
+  @override
+  String get settings_language => 'Idioma';
+
+  @override
+  String get language_system_default => 'Predeterminado del sistema';
+
+  @override
+  String get settings_tts => 'Texto a voz';
+
+  @override
+  String get settings_android_assistant => 'Asistente de Android';
+
+  @override
+  String get assistant_default_title => 'Asistente de voz predeterminado';
+
+  @override
+  String get assistant_default_description =>
+      'Establece Localmind como tu asistente de voz predeterminado en Android.';
+
+  @override
+  String get assistant_status_active =>
+      'Localmind está configurado como tu asistente predeterminado';
+
+  @override
+  String get assistant_status_available =>
+      'Localmind se puede configurar como tu asistente predeterminado';
+
+  @override
+  String get assistant_status_manual =>
+      'Abre los ajustes del sistema y selecciona Localmind manualmente';
+
+  @override
+  String get assistant_status_unsupported =>
+      'El asistente predeterminado solo está disponible en Android 7.0 o superior';
+
+  @override
+  String get assistant_status_checking =>
+      'Comprobando el estado del asistente…';
+
+  @override
+  String get assistant_set_default => 'Establecer asistente predeterminado';
+
+  @override
+  String get assistant_open_settings => 'Abrir ajustes del asistente';
+
+  @override
+  String assistant_error(Object error) {
+    return 'Error: $error';
+  }
+
+  @override
+  String get settings_behavior => 'Comportamiento';
+
+  @override
+  String get settings_on_device => 'Inferencia local';
+
+  @override
+  String get settings_default_server => 'Servidor predeterminado';
+
+  @override
+  String get settings_default_persona => 'Personaje predeterminado';
+
+  @override
+  String get settings_default_model => 'Modelo predeterminado';
+
+  @override
+  String get settings_default_model_desc =>
+      'Se selecciona automáticamente al iniciar un nuevo chat.';
+
+  @override
+  String get settings_privacy => 'Privacidad';
+
+  @override
+  String get settings_data_management => 'Gestión de datos';
+
+  @override
+  String get settings_about => 'Acerca de';
+
+  @override
+  String get theme => 'Tema';
+
+  @override
+  String get theme_system => 'Sistema';
+
+  @override
+  String get theme_light => 'Claro';
+
+  @override
+  String get theme_dark => 'Oscuro';
+
+  @override
+  String get theme_claude => 'Claude';
+
+  @override
+  String get font_size => 'Tamaño de fuente';
+
+  @override
+  String get font_size_desc => 'Ajustar el tamaño del texto en el chat.';
+
+  @override
+  String get font_preview =>
+      'El rápido zorro marrón salta sobre el perro perezoso.';
+
+  @override
+  String get code_theme_dark => 'Tema de código (Oscuro)';
+
+  @override
+  String get code_theme_light => 'Tema de código (Claro)';
+
+  @override
+  String get code_theme_desc =>
+      'Elija el tema de resaltado de sintaxis para los bloques de código.';
+
+  @override
+  String get tts_engine => 'Motor TTS';
+
+  @override
+  String get tts_engine_system => 'TTS del sistema';
+
+  @override
+  String get tts_engine_kitten => 'Kitten TTS';
+
+  @override
+  String get voice => 'Voz';
+
+  @override
+  String get voice_female => 'Femenino';
+
+  @override
+  String get voice_male => 'Masculino';
+
+  @override
+  String get voice_other => 'Otro';
+
+  @override
+  String get tts_speed => 'Velocidad de TTS';
+
+  @override
+  String get tts_speed_desc => 'Ajustar la velocidad de reproducción.';
+
+  @override
+  String get manage_tts_models => 'Gestionar modelos TTS';
+
+  @override
+  String get manage_on_device_models => 'Gestionar modelos locales';
+
+  @override
+  String get enable_smart_reply => 'Respuestas inteligentes';
+
+  @override
+  String get ai_user_response_enabled =>
+      'Mensaje de usuario de IA (mantener presionado)';
+
+  @override
+  String get ai_user_response_enabled_desc =>
+      'Mantén presionado el botón de enviar durante 3 segundos para que la IA escriba y envíe tu próximo mensaje';
+
+  @override
+  String get ai_user_response_tooltip => 'Generar mensaje de usuario con IA';
+
+  @override
+  String get streaming_responses => 'Respuestas en tiempo real (streaming)';
+
+  @override
+  String get auto_generate_titles => 'Autogenerar títulos';
+
+  @override
+  String get send_on_enter => 'Enviar al presionar Enter';
+
+  @override
+  String get show_system_messages => 'Mostrar mensajes del sistema';
+
+  @override
+  String get show_system_messages_desc =>
+      'Cuando no se seleccione ningún personaje, enviar un prompt de sistema de asistente predeterminado con cada solicitud';
+
+  @override
+  String get show_system_messages_in_chat =>
+      'Mostrar mensajes del sistema en el chat';
+
+  @override
+  String get show_system_messages_in_chat_desc =>
+      'Mostrar mensajes de sistema (por ejemplo, de una copia de seguridad importada) como burbujas visibles en la conversación';
+
+  @override
+  String get auto_collapse_thinking => 'Plegar pensamiento automáticamente';
+
+  @override
+  String get auto_collapse_thinking_desc =>
+      'Plegar automáticamente el proceso de razonamiento tras completar la respuesta cuando hay una respuesta principal';
+
+  @override
+  String get haptic_feedback => 'Comentarios hápticos';
+
+  @override
+  String get enable_mcp => 'Habilitar MCP';
+
+  @override
+  String get new_chat_mcp_default => 'Nuevo chat MCP predeterminado';
+
+  @override
+  String get show_data_indicator => 'Mostrar indicador de datos';
+
+  @override
+  String get privacy_info => '\"LocalMind nunca ve sus datos\"';
+
+  @override
+  String get delete_all_conversations => 'Eliminar todas las conversaciones';
+
+  @override
+  String get reset_settings_defaults =>
+      'Restablecer ajustes a los predeterminados';
+
+  @override
+  String get chat_title => 'LocalMind';
+
+  @override
+  String get chat_parameters_tooltip => 'Parámetros del chat';
+
+  @override
+  String get change_persona => 'Cambiar personaje';
+
+  @override
+  String get set_persona => 'Establecer personaje';
+
+  @override
+  String get remove_persona => 'Eliminar personaje';
+
+  @override
+  String get clear_conversation => 'Limpiar conversación';
+
+  @override
+  String get connection_error => 'Error de conexión. Compruebe su servidor.';
+
+  @override
+  String get disconnected => 'Desconectado del servidor.';
+
+  @override
+  String get configure => 'Configurar';
+
+  @override
+  String get select_model => 'Seleccionar modelo';
+
+  @override
+  String get select_persona => 'Seleccionar personaje';
+
+  @override
+  String get manage_personas => 'Gestionar personajes';
+
+  @override
+  String get personas_combine_hint =>
+      'Los personajes seleccionados se combinarán';
+
+  @override
+  String get start_conversation => 'Comenzar una conversación';
+
+  @override
+  String get recent_chats => 'Chats recientes';
+
+  @override
+  String get see_all => 'Ver todo';
+
+  @override
+  String get quick_write => 'Ayúdame a escribir una función';
+
+  @override
+  String get quick_explain => 'Explica este código';
+
+  @override
+  String get quick_debug => 'Depura esto por mí';
+
+  @override
+  String get quick_async => '¿Cómo uso async/await?';
+
+  @override
+  String get history_missing_title => 'Historial faltante';
+
+  @override
+  String get history_missing_desc =>
+      'O bien los mensajes de este chat fueron eliminados o el registro de historial está dañado.';
+
+  @override
+  String get technical_details => 'Detalles técnicos';
+
+  @override
+  String get last_error => 'Último error:';
+
+  @override
+  String get copy_info => 'Copiar información';
+
+  @override
+  String get conversation_id => 'ID de conversación';
+
+  @override
+  String get created_at => 'Creado el';
+
+  @override
+  String get expected_messages => 'Mensajes esperados';
+
+  @override
+  String get debug_dialog_desc =>
+      'Información de diagnóstico para ayudar a identificar problemas de sincronización.';
+
+  @override
+  String get chat_input_hint => 'Pregunte cualquier cosa';
+
+  @override
+  String get send_message_tooltip => 'Enviar mensaje';
+
+  @override
+  String get stop_generation_tooltip => 'Detener generación';
+
+  @override
+  String get attach_images_tooltip => 'Adjuntar imágenes';
+
+  @override
+  String get start_listening_tooltip => 'Iniciar escucha';
+
+  @override
+  String get stop_listening_tooltip => 'Detener escucha';
+
+  @override
+  String tool_label(String toolCallId) {
+    return 'Herramienta: $toolCallId';
+  }
+
+  @override
+  String get tool_unknown => 'Herramienta: Desconocida';
+
+  @override
+  String get message_options => 'Opciones de mensaje';
+
+  @override
+  String get copy_markdown => 'Copiar como Markdown';
+
+  @override
+  String get copied_markdown => 'Copiado como Markdown';
+
+  @override
+  String get read_aloud => 'Leer en voz alta';
+
+  @override
+  String get stop_reading => 'Detener lectura';
+
+  @override
+  String get more => 'Más';
+
+  @override
+  String character_count(int length) {
+    return '$length caracteres';
+  }
+
+  @override
+  String get edit_message => 'Editar mensaje';
+
+  @override
+  String get edit_message_desc =>
+      'Al guardar se eliminará la respuesta del asistente que aparece a continuación y se volverá a generar.';
+
+  @override
+  String get save_regenerate => 'Guardar y regenerar';
+
+  @override
+  String get chat_settings_title => 'Ajustes de chat';
+
+  @override
+  String get reset_defaults => 'Restablecer valores predeterminados';
+
+  @override
+  String get parameters_tab => 'Parámetros';
+
+  @override
+  String get mcp_tab => 'MCP';
+
+  @override
+  String get temperature => 'Temperatura';
+
+  @override
+  String get temperature_desc =>
+      'Controla la aleatoriedad: Mayor = Creativo, Menor = Enfocado';
+
+  @override
+  String get top_p => 'Top P';
+
+  @override
+  String get top_p_desc => 'Umbral de muestreo de núcleo';
+
+  @override
+  String get max_tokens => 'Máximo de tokens';
+
+  @override
+  String get max_tokens_desc => 'Límite de respuesta';
+
+  @override
+  String get context_length => 'Longitud del contexto';
+
+  @override
+  String get context_length_desc => 'Ventana de historial';
+
+  @override
+  String get mcp_disabled_warning =>
+      'MCP está deshabilitado globalmente. Habilítelo en Ajustes para usar estas funciones.';
+
+  @override
+  String get mcp_enable_chat => 'Habilitar MCP para este chat';
+
+  @override
+  String mcp_connection_failed(String error) {
+    return 'Couldn\'t connect: $error';
+  }
+
+  @override
+  String get mcp_tools_unsupported_runtime =>
+      'This model\'s runtime can\'t call tools yet. Switch to a Gemma (LiteRT) model or a server model to use MCP tools.';
+
+  @override
+  String get auto_execute_tools => 'Ejecutar herramientas automáticamente';
+
+  @override
+  String get beta_label => 'Beta';
+
+  @override
+  String get experimental_label => 'Experimental';
+
+  @override
+  String get add_ephemeral_mcp => 'Añadir servidor MCP efímero';
+
+  @override
+  String get mcp_label_placeholder => 'Etiqueta';
+
+  @override
+  String get mcp_url_placeholder => 'URL (https://...)';
+
+  @override
+  String get active_integrations => 'Integraciones activas';
+
+  @override
+  String get import_mcp_json => 'Importar JSON';
+
+  @override
+  String get import_mcp_json_dialog_title =>
+      'Importar JSON de configuración MCP';
+
+  @override
+  String get import_mcp_json_instructions =>
+      'Copia tu JSON de mcpServers directamente desde LM Studio (mcp.json) o pega una lista de complementos a continuación:';
+
+  @override
+  String get import_mcp_json_placeholder =>
+      'Pega el JSON de mcpServers o la lista de complementos aquí...';
+
+  @override
+  String mcp_import_success(int count) {
+    return '$count integración(es) importada(s) con éxito';
+  }
+
+  @override
+  String get mcp_import_failed =>
+      'No se encontraron integraciones MCP válidas en el JSON';
+
+  @override
+  String get enable_notifications => 'Habilitar notificaciones';
+
+  @override
+  String get enable_notifications_desc =>
+      'Reciba notificaciones cuando los modelos terminen de descargarse.';
+
+  @override
+  String get chat_history_title => 'Historial de chat';
+
+  @override
+  String get conversation_just_now => 'Hace un momento';
+
+  @override
+  String conversation_minutes_ago(int minutes) {
+    return 'hace ${minutes}m';
+  }
+
+  @override
+  String conversation_hours_ago(int hours) {
+    return 'hace ${hours}h';
+  }
+
+  @override
+  String get conversation_yesterday => 'Ayer';
+
+  @override
+  String conversation_days_ago(int days) {
+    return 'hace ${days}d';
+  }
+
+  @override
+  String conversation_date(int month, int day, int year) {
+    return '$month/$day/$year';
+  }
+
+  @override
+  String get options_tooltip => 'Opciones';
+
+  @override
+  String get no_results_found => 'No se encontraron resultados';
+
+  @override
+  String get no_conversations_yet => 'Aún sin conversaciones';
+
+  @override
+  String get try_different_search =>
+      'Pruebe con un término de búsqueda diferente';
+
+  @override
+  String get start_new_conversation => 'Comenzar una nueva conversación';
+
+  @override
+  String get rename_conversation => 'Renombrar conversación';
+
+  @override
+  String get enter_new_title => 'Introduzca un nuevo título';
+
+  @override
+  String get pinned_section => 'FIJADOS';
+
+  @override
+  String get today_section => 'HOY';
+
+  @override
+  String get yesterday_section => 'AYER';
+
+  @override
+  String get previous_7_days => 'ÚLTIMOS 7 DÍAS';
+
+  @override
+  String get previous_30_days => 'ÚLTIMOS 30 DÍAS';
+
+  @override
+  String get older_section => 'MÁS ANTIGUOS';
+
+  @override
+  String get onboarding_choose_language => 'Elija el idioma';
+
+  @override
+  String get onboarding_choose_language_desc =>
+      'Seleccione su idioma preferido. Puede cambiar esto en cualquier momento en la configuración.';
+
+  @override
+  String get onboarding_localmind => 'LOCALMIND';
+
+  @override
+  String get onboarding_connect_server => 'Conecte su\nservidor';
+
+  @override
+  String get onboarding_connect_desc =>
+      'Conéctese a LM Studio, Ollama o\nOpenRouter para comenzar su experiencia\nprivada de IA.';
+
+  @override
+  String get openai_compatible_api => 'API compatible con OpenAI';
+
+  @override
+  String get https_requires_ssl => 'HTTPS requiere SSL';
+
+  @override
+  String get most_local_setups_use_http =>
+      'La mayoría de las configuraciones locales usan http://';
+
+  @override
+  String get onboarding_welcome => 'Bienvenido a LocalMind';
+
+  @override
+  String get server_type_on_device => 'Local';
+
+  @override
+  String get server_type_lm_studio => 'LM Studio';
+
+  @override
+  String get server_type_ollama => 'Ollama';
+
+  @override
+  String get server_type_ollama_cloud => 'Ollama Cloud';
+
+  @override
+  String get server_type_ollama_cloud_sub => 'NUBE ADMINISTRADA';
+
+  @override
+  String get server_type_ollama_cloud_display => 'Ollama Cloud';
+
+  @override
+  String get server_address_ollama_cloud => 'ollama.com';
+
+  @override
+  String get ollama_cloud_disclosure =>
+      'Al conectar Ollama Cloud, tus mensajes e insumos de chat se envían a los servidores administrados de Ollama para la inferencia. LocalMind no rastrea ni almacena tus conversaciones. Puedes revocar esta clave en cualquier momento en ollama.com/settings/keys.';
+
+  @override
+  String get api_key_required_ollama_cloud =>
+      'Se requiere clave API para Ollama Cloud';
+
+  @override
+  String get api_key_hint_ollama_cloud => 'Pega tu clave API de Ollama Cloud';
+
+  @override
+  String get add_server_ollama_cloud_subtitle =>
+      'Conéctate a Ollama Cloud con una clave API de ollama.com/settings/keys para acceder a modelos administrados en la nube.';
+
+  @override
+  String get add_server_openrouter_subtitle =>
+      'Conéctate a través de OpenRouter con una clave API válida y mantén este perfil listo para el enrutamiento de modelos.';
+
+  @override
+  String get add_server_requesty_subtitle =>
+      'Conéctate a través de Requesty con una clave API válida y mantén este perfil listo para el enrutamiento de modelos.';
+
+  @override
+  String get add_server_endpoint_subtitle =>
+      'Configura un punto de enlace local o alojado por ti mismo y luego verifica la conexión antes de guardar.';
+
+  @override
+  String get server_type_openrouter => 'OpenRouter';
+
+  @override
+  String get server_type_requesty => 'Requesty';
+
+  @override
+  String get server_type_openrouter_sub => 'NUBE UNIFICADA';
+
+  @override
+  String get server_type_requesty_sub => 'NUBE UNIFICADA';
+
+  @override
+  String get ready_continue => 'LISTO PARA CONTINUAR';
+
+  @override
+  String get waiting_selection => 'ESPERANDO SELECCIÓN';
+
+  @override
+  String get setup_connection => 'Configurar conexión';
+
+  @override
+  String setup_connection_desc(String server) {
+    return 'Configure su servidor $server para comenzar a chatear.';
+  }
+
+  @override
+  String get server_name => 'Nombre de servidor';
+
+  @override
+  String get name_required => 'Nombre requerido';
+
+  @override
+  String get name_max_50 => 'Máx. 50 caracteres';
+
+  @override
+  String get host_label => 'Host / Dirección IP';
+
+  @override
+  String get host_required => 'Host requerido';
+
+  @override
+  String get port_label => 'Puerto';
+
+  @override
+  String get port_required => 'Puerto requerido';
+
+  @override
+  String get port_invalid => 'Debe ser un número';
+
+  @override
+  String get port_range => 'Introduzca un puerto válido (1-65535)';
+
+  @override
+  String get api_key_required => 'Clave API *';
+
+  @override
+  String get api_key_optional => 'Clave API (Opcional)';
+
+  @override
+  String get api_key_required_openrouter =>
+      'Clave API requerida para OpenRouter';
+
+  @override
+  String get api_key_required_requesty => 'Clave API requerida para Requesty';
+
+  @override
+  String get api_key_format =>
+      'Las claves de API de OpenRouter comienzan con sk-';
+
+  @override
+  String get my_server_hint => 'Mi servidor';
+
+  @override
+  String get name_length_validation =>
+      'El nombre debe tener 50 caracteres o menos';
+
+  @override
+  String get host_valid => 'Introduzca un nombre de host o dirección IP válida';
+
+  @override
+  String get api_key_hint_openrouter => 'sk-...';
+
+  @override
+  String get api_key_hint_requesty => 'rqsty-...';
+
+  @override
+  String get api_key_hint_generic => 'Para servidores autenticados';
+
+  @override
+  String get update_server => 'Actualizar servidor';
+
+  @override
+  String get save_server => 'Guardar servidor';
+
+  @override
+  String get server_updated => 'Servidor actualizado';
+
+  @override
+  String get server_added => 'Servidor añadido';
+
+  @override
+  String get download_model_title => 'Descargar un modelo';
+
+  @override
+  String get download_model_desc =>
+      'Elija un modelo para descargar.\nSe ejecutará localmente en su dispositivo.';
+
+  @override
+  String get no_model_downloaded_title => 'No Model Downloaded';
+
+  @override
+  String get no_model_downloaded_desc =>
+      'To use on-device AI, you need to download or select at least one model. You can choose a model now, or skip and download one later in settings.';
+
+  @override
+  String get choose_a_model => 'Choose Model';
+
+  @override
+  String get skip_for_now => 'Skip for Now';
+
+  @override
+  String get download_in_progress_title => 'Download in Progress';
+
+  @override
+  String get download_in_progress_desc =>
+      'A model is currently downloading. You can wait for it to complete or continue in the background.';
+
+  @override
+  String get wait_for_download => 'Wait';
+
+  @override
+  String get continue_anyway => 'Continue Anyway';
+
+  @override
+  String get download_model_required_hint =>
+      'At least one downloaded model is required for on-device chat.';
+
+  @override
+  String get on_device_android_only =>
+      'La inferencia local está disponible actualmente solo en Android.';
+
+  @override
+  String get total_ram => 'RAM total';
+
+  @override
+  String get available => 'Disponible';
+
+  @override
+  String ram_min_required(String fileSize) {
+    return '$fileSize GB de RAM mín.';
+  }
+
+  @override
+  String download_progress(String percent, String speed) {
+    return '$percent% • $speed';
+  }
+
+  @override
+  String eta_label(String eta) {
+    return 'Tiempo restante: $eta';
+  }
+
+  @override
+  String paused_progress(String percent) {
+    return 'Pausado - $percent%';
+  }
+
+  @override
+  String ram_warning_body_download(String ram, String totalMemory) {
+    return 'Este modelo requiere al menos $ram GB de RAM, pero su dispositivo tiene $totalMemory. Es posible que no se ejecute correctamente o que cause el cierre de la aplicación.';
+  }
+
+  @override
+  String ram_warning_body_load(String availableRAM, String ram) {
+    return 'Su dispositivo tiene $availableRAM de RAM disponible, pero este modelo recomienda al menos $ram GB. Cargarlo podría fallar o causar inestabilidad.';
+  }
+
+  @override
+  String get choose_theme => 'Elegir tema';
+
+  @override
+  String get choose_theme_desc =>
+      'Personalice la apariencia de la aplicación. Siempre puede cambiar esto más tarde en los ajustes.';
+
+  @override
+  String get theme_card_system => 'Sistema';
+
+  @override
+  String get theme_card_system_sub =>
+      'Coincide con los ajustes de su dispositivo';
+
+  @override
+  String get theme_card_light => 'Claro';
+
+  @override
+  String get theme_card_light_sub => 'Limpio y brillante';
+
+  @override
+  String get theme_card_dark => 'Oscuro';
+
+  @override
+  String get theme_card_dark_sub => 'Fácil para los ojos';
+
+  @override
+  String get theme_card_claude => 'Claude';
+
+  @override
+  String get theme_card_claude_sub => 'Un tema cálido con tonos durazno';
+
+  @override
+  String get stay_updated => 'Manténgase al día';
+
+  @override
+  String get stay_updated_desc =>
+      'Reciba notificaciones cuando sus modelos de IA terminen de descargarse o cuando se completen tareas largas.';
+
+  @override
+  String get notification_benefit_downloads =>
+      'Progreso de descarga del modelo';
+
+  @override
+  String get notification_benefit_completions => 'Completados de generación';
+
+  @override
+  String get notification_benefit_background =>
+      'Estado de las tareas en segundo plano';
+
+  @override
+  String get allow_notifications => 'Permitir notificaciones';
+
+  @override
+  String get servers_title => 'Servidores';
+
+  @override
+  String get no_servers_yet => 'Aún sin servidores';
+
+  @override
+  String get no_servers_desc =>
+      'Añada su primer servidor para comenzar a chatear con modelos de IA.';
+
+  @override
+  String get add_server => 'Añadir servidor';
+
+  @override
+  String switched_to_server(String name) {
+    return 'Cambiado a $name';
+  }
+
+  @override
+  String get edit_server => 'Editar servidor';
+
+  @override
+  String get add_server_title => 'Añadir servidor';
+
+  @override
+  String get server_type_label => 'Tipo de servidor';
+
+  @override
+  String get server_icon_label => 'Icono de servidor';
+
+  @override
+  String get default_icon => 'Icono predeterminado';
+
+  @override
+  String get server_type_lm_studio_display => 'LM Studio';
+
+  @override
+  String get server_type_openai_display => 'Compatible con OpenAI';
+
+  @override
+  String get server_type_ollama_display => 'Ollama';
+
+  @override
+  String get server_type_openrouter_display => 'OpenRouter';
+
+  @override
+  String get server_type_requesty_display => 'Requesty';
+
+  @override
+  String get server_type_on_device_display => 'Local';
+
+  @override
+  String get server_address_openrouter => 'openrouter.ai';
+
+  @override
+  String get server_address_requesty => 'router.requesty.ai';
+
+  @override
+  String get server_address_on_device => 'Inferencia local';
+
+  @override
+  String server_address_format(String host, String port) {
+    return '$host:$port';
+  }
+
+  @override
+  String get default_badge => 'Predeterminado';
+
+  @override
+  String get set_as_default => 'Establecer como predeterminado';
+
+  @override
+  String get select_icon => 'Seleccionar icono';
+
+  @override
+  String get select_icon_desc => 'Elija un icono para su servidor';
+
+  @override
+  String get search_icons_hint => 'Buscar iconos...';
+
+  @override
+  String get server_icon_stack => 'Pila de servidores';
+
+  @override
+  String get server_icon_stack2 => 'Pila de servidores 02';
+
+  @override
+  String get server_icon_stack3 => 'Pila de servidores 03';
+
+  @override
+  String get server_icon_cloud => 'Nube';
+
+  @override
+  String get server_icon_cloud_server => 'Servidor en la nube';
+
+  @override
+  String get server_icon_mcp => 'Servidor MCP';
+
+  @override
+  String get server_icon_database => 'Base de datos';
+
+  @override
+  String get server_icon_database1 => 'Base de datos 01';
+
+  @override
+  String get server_icon_database2 => 'Base de datos 02';
+
+  @override
+  String get server_icon_cpu => 'CPU';
+
+  @override
+  String get server_icon_chip => 'Chip';
+
+  @override
+  String get server_icon_chip2 => 'Chip 02';
+
+  @override
+  String get server_icon_computer => 'Computadora';
+
+  @override
+  String get server_icon_laptop => 'Laptop';
+
+  @override
+  String get server_icon_terminal => 'Terminal de computadora';
+
+  @override
+  String get server_icon_code => 'Código';
+
+  @override
+  String get server_icon_ai_brain => 'Cerebro de IA';
+
+  @override
+  String get server_icon_ai_brain2 => 'Cerebro de IA 02';
+
+  @override
+  String get server_icon_ai_cloud => 'Nube de IA';
+
+  @override
+  String get server_icon_ai_network => 'Red de IA';
+
+  @override
+  String get server_icon_ai_chat => 'Chat de IA';
+
+  @override
+  String get server_icon_cellular => 'Red celular';
+
+  @override
+  String get server_icon_plug1 => 'Enchufe 01';
+
+  @override
+  String get server_icon_plug2 => 'Enchufe 02';
+
+  @override
+  String get server_icon_bot => 'Bot';
+
+  @override
+  String get server_icon_bot2 => 'Bot 02';
+
+  @override
+  String get server_icon_robotic => 'Robótico';
+
+  @override
+  String get server_icon_rocket => 'Cohete';
+
+  @override
+  String get server_icon_star => 'Estrella';
+
+  @override
+  String get server_icon_settings1 => 'Ajustes 01';
+
+  @override
+  String get server_icon_settings2 => 'Ajustes 02';
+
+  @override
+  String get server_icon_home1 => 'Inicio 01';
+
+  @override
+  String get server_icon_home2 => 'Inicio 02';
+
+  @override
+  String get server_icon_folder1 => 'Carpeta 01';
+
+  @override
+  String get server_icon_folder2 => 'Carpeta 02';
+
+  @override
+  String get server_icon_file1 => 'Archivo 01';
+
+  @override
+  String get server_icon_lock => 'Bloqueo';
+
+  @override
+  String get server_icon_key => 'Clave 01';
+
+  @override
+  String get server_icon_link => 'Enlace 01';
+
+  @override
+  String get server_icon_globe => 'Globo';
+
+  @override
+  String get server_icon_api => 'API';
+
+  @override
+  String get server_icon_arrow_right => 'Flecha derecha 01';
+
+  @override
+  String get server_icon_check => 'Círculo de verificación';
+
+  @override
+  String get server_icon_alert => 'Círculo de alerta';
+
+  @override
+  String get server_icon_info => 'Círculo de información';
+
+  @override
+  String get server_icon_zap => 'Zap';
+
+  @override
+  String get server_icon_cloud_upload => 'Subida a la nube';
+
+  @override
+  String get server_icon_cloud_download => 'Descarga en la nube';
+
+  @override
+  String get server_icon_refresh => 'Actualizar';
+
+  @override
+  String get server_icon_hard_drive => 'Disco duro';
+
+  @override
+  String get server_icon_drive => 'Unidad';
+
+  @override
+  String get personas_title => 'Personajes';
+
+  @override
+  String get persona_category_general => 'General';
+
+  @override
+  String get persona_category_coding => 'Programación';
+
+  @override
+  String get persona_category_education => 'Educación';
+
+  @override
+  String get persona_category_creative => 'Creativo';
+
+  @override
+  String get persona_builtin_section => 'INTEGRADO';
+
+  @override
+  String get persona_my_section => 'MIS PERSONAJES';
+
+  @override
+  String get clone_edit => 'Clonar y editar';
+
+  @override
+  String get builtin_badge => 'Integrado';
+
+  @override
+  String get no_personas_found => 'No se encontraron personajes';
+
+  @override
+  String get no_personas_desc =>
+      'Cree su primer personaje para personalizar el comportamiento de la IA.';
+
+  @override
+  String get edit_persona => 'Editar personaje';
+
+  @override
+  String get create_persona => 'Crear personaje';
+
+  @override
+  String get create_persona_button => 'Crear';
+
+  @override
+  String get emoji_label => 'Emoji';
+
+  @override
+  String get name_label => 'Nombre';
+
+  @override
+  String get my_persona_hint => 'Mi personaje';
+
+  @override
+  String get category_label => 'Categoría';
+
+  @override
+  String get description_optional => 'Descripción (opcional)';
+
+  @override
+  String get description_hint => 'Lo que hace este personaje...';
+
+  @override
+  String get system_prompt => 'Instrucción del sistema';
+
+  @override
+  String character_count_max(int currentLen) {
+    return '$currentLen/4000';
+  }
+
+  @override
+  String get no_prompt_placeholder => 'Aún sin indicaciones...';
+
+  @override
+  String get prompt_hint => 'Usted es un asistente servicial...';
+
+  @override
+  String get prompt_required => 'La instrucción del sistema es requerida';
+
+  @override
+  String get prompt_max_chars => 'Máx. 4000 caracteres';
+
+  @override
+  String prompt_length_warning(int count) {
+    return 'Los prompts largos ($count caracteres) usan más de la ventana de contexto del modelo y pueden ralentizar las respuestas o causar errores en modelos más pequeños.';
+  }
+
+  @override
+  String get advanced_settings => 'Ajustes avanzados';
+
+  @override
+  String get temperature_label => 'Temperatura (0.0-2.0)';
+
+  @override
+  String get top_p_label => 'Top P (0.0-1.0)';
+
+  @override
+  String get temp_hint => '0.7';
+
+  @override
+  String get top_p_hint => '0.9';
+
+  @override
+  String get range_0_2 => '0.0-2.0';
+
+  @override
+  String get range_0_1 => '0.0-1.0';
+
+  @override
+  String get persona_updated => 'Personaje actualizado';
+
+  @override
+  String get persona_created => 'Personaje creado';
+
+  @override
+  String get tts_models_title => 'Modelos de texto a voz';
+
+  @override
+  String get always_available => 'Siempre disponible';
+
+  @override
+  String get tts_system_desc =>
+      'Utiliza el motor de texto a voz integrado de su dispositivo.\nNo requiere descargas. La selección de voz utiliza los ajustes del sistema de su dispositivo.';
+
+  @override
+  String get downloading_status => 'Descargando...';
+
+  @override
+  String tts_kitten_desc(String size) {
+    return 'TTS neural ultrarrápido con 8 voces expresivas.\nRequiere descarga de $size.';
+  }
+
+  @override
+  String tts_piper_desc(String size) {
+    return 'Voces Piper sin conexión rápidas con 2 voces expresivas.\nRequiere una descarga de $size por voz.';
+  }
+
+  @override
+  String engine_spec(String sizeMb, String ramMb, int voiceCount) {
+    return '$sizeMb MB · $ramMb MB de RAM · $voiceCount voces';
+  }
+
+  @override
+  String get on_device_models_title => 'Modelos locales';
+
+  @override
+  String get settings_huggingface_token => 'Token de Hugging Face (Opcional)';
+
+  @override
+  String get settings_huggingface_token_desc =>
+      'Solo se requiere para modelos restringidos (p. ej., Gemma). Obtenga un token en huggingface.co/settings/tokens.';
+
+  @override
+  String get settings_huggingface_token_set => 'Token guardado';
+
+  @override
+  String get settings_huggingface_token_cleared => 'Token eliminado';
+
+  @override
+  String get model_requires_huggingface_token =>
+      'Requiere un token de Hugging Face';
+
+  @override
+  String get model_missing_huggingface_token =>
+      'Este modelo está restringido en Hugging Face. Añada un token en Ajustes → Inferencia en el dispositivo para descargarlo.';
+
+  @override
+  String get set_huggingface_token => 'Configurar token';
+
+  @override
+  String get clear_huggingface_token => 'Borrar';
+
+  @override
+  String get edit_huggingface_token_dialog_title =>
+      'Token de acceso de Hugging Face';
+
+  @override
+  String get huggingface_token_dialog_hint => 'hf_…';
+
+  @override
+  String get server_type_ollama_desc =>
+      'Motor de IA local. No requiere clave API.';
+
+  @override
+  String get server_type_on_device_desc =>
+      'Se ejecuta en su teléfono. Algunos modelos necesitan un token de Hugging Face.';
+
+  @override
+  String get server_type_lm_studio_desc =>
+      'Servidor API local. No requiere clave API.';
+
+  @override
+  String get available_models => 'Modelos disponibles';
+
+  @override
+  String get device_memory => 'Memoria del dispositivo';
+
+  @override
+  String get ram_usage => 'Uso de RAM';
+
+  @override
+  String get memory_healthy => 'Saludable';
+
+  @override
+  String get memory_critical => 'Crítico';
+
+  @override
+  String get memory_low => 'Bajo';
+
+  @override
+  String ram_used(String percent) {
+    return '$percent% usado';
+  }
+
+  @override
+  String get available_ram => 'RAM disponible';
+
+  @override
+  String get total_capacity => 'Capacidad total';
+
+  @override
+  String get loaded_status => 'Cargado';
+
+  @override
+  String get inference_backend => 'Motor de inferencia';
+
+  @override
+  String get backend_ios_notice =>
+      'Solo el motor de CPU está disponible en iOS.';
+
+  @override
+  String get backend_cpu_desc =>
+      'Funciona en todos los dispositivos. Más compatible.';
+
+  @override
+  String get backend_gpu_desc =>
+      'Aceleración OpenCL. Más rápido en dispositivos compatibles.';
+
+  @override
+  String get backend_npu_desc =>
+      'NPU del fabricante (Qualcomm/MediaTek). Inferencia más rápida.';
+
+  @override
+  String get select_model_title => 'Seleccionar modelo';
+
+  @override
+  String get refresh_models => 'Actualizar modelos';
+
+  @override
+  String get search_models_hint => 'Buscar modelos...';
+
+  @override
+  String get no_server_connected => 'Ningún servidor conectado';
+
+  @override
+  String get add_server_first =>
+      'Añada un servidor primero para ver los modelos disponibles.';
+
+  @override
+  String get failed_load_models => 'No se pudieron cargar los modelos';
+
+  @override
+  String get no_models_available => 'No hay modelos disponibles';
+
+  @override
+  String no_models_match(String searchQuery) {
+    return 'Ningún modelo coincide con \"$searchQuery\"';
+  }
+
+  @override
+  String model_load_failed(String error) {
+    return 'No se pudo cargar el modelo: $error';
+  }
+
+  @override
+  String model_unloaded_ollama(String name) {
+    return '$name se liberará de la memoria una vez que pase el tiempo de espera activo';
+  }
+
+  @override
+  String model_unloaded_success(String name) {
+    return '$name liberado de memoria correctamente';
+  }
+
+  @override
+  String model_unload_failed(String error) {
+    return 'No se pudo descargar el modelo de la memoria: $error';
+  }
+
+  @override
+  String get unload_from_server => 'Liberar del servidor';
+
+  @override
+  String context_chip(String ctx) {
+    return '$ctx ctx';
+  }
+
+  @override
+  String get unload_all_models => 'Descargar todos los modelos';
+
+  @override
+  String loaded_models_count(int count) {
+    return '$count modelos cargados';
+  }
+
+  @override
+  String get all_models_unloaded => 'Todos los modelos descargados';
+
+  @override
+  String get branch_chat => 'Ramificar chat';
+
+  @override
+  String get branch_chat_desc => 'Crear un nuevo chat a partir de este mensaje';
+
+  @override
+  String get edit_assistant_message_desc =>
+      'Editar el contenido del mensaje del asistente';
+
+  @override
+  String switch_to_model(String modelName, Object model) {
+    return 'Cambiar al modelo $model';
+  }
+
+  @override
+  String download_notification_title(String modelName) {
+    return 'Descargando $modelName...';
+  }
+
+  @override
+  String get download_complete_notification => '¡Descarga completa!';
+
+  @override
+  String download_complete_body(String modelName) {
+    return '$modelName se ha descargado correctamente.';
+  }
+
+  @override
+  String download_failed_notification(String error) {
+    return 'Descarga fallida: $error';
+  }
+
+  @override
+  String download_failed_body(String modelName) {
+    return 'No se pudo descargar $modelName.';
+  }
+
+  @override
+  String get engine_name_system => 'TTS del sistema';
+
+  @override
+  String get engine_tagline_system => 'Motor integrado en el dispositivo';
+
+  @override
+  String get engine_name_kitten => 'Kitten TTS';
+
+  @override
+  String get engine_tagline_kitten => 'TTS neural de alta velocidad';
+
+  @override
+  String get engine_name_sherpa => 'Sherpa ONNX VITS';
+
+  @override
+  String get engine_tagline_sherpa => 'Voces Piper sin conexión';
+
+  @override
+  String get voice_jasper => 'Jasper';
+
+  @override
+  String get voice_bella => 'Bella';
+
+  @override
+  String get voice_bruno => 'Bruno';
+
+  @override
+  String get voice_luna => 'Luna';
+
+  @override
+  String get voice_hugo => 'Hugo';
+
+  @override
+  String get voice_rosie => 'Rosie';
+
+  @override
+  String get voice_leo => 'Leo';
+
+  @override
+  String get voice_kiki => 'Kiki';
+
+  @override
+  String get voice_lessac => 'Lessac (US)';
+
+  @override
+  String get voice_ryan => 'Ryan (US)';
+
+  @override
+  String get model_qwen_3 => 'Qwen 3 0.6B';
+
+  @override
+  String get model_qwen_3_desc =>
+      'Modelo de chat de propósito general más pequeño. Respuestas rápidas, bajo uso de memoria.';
+
+  @override
+  String get model_license_apache => 'Apache-2.0';
+
+  @override
+  String get model_qwen_25 => 'Qwen 2.5 1.5B Instruct';
+
+  @override
+  String get model_qwen_25_desc =>
+      'Calidad y tamaño equilibrados. Bueno para conversación general.';
+
+  @override
+  String get model_deepseek => 'DeepSeek R1 Distill Qwen 1.5B';
+
+  @override
+  String get model_deepseek_desc =>
+      'Modelo de razonamiento y cadena de pensamiento. El mejor para tareas lógicas.';
+
+  @override
+  String get model_license_mit => 'MIT';
+
+  @override
+  String get model_gemma => 'Gemma 4 E2B Instruct';
+
+  @override
+  String get model_gemma_desc =>
+      'Modelo insignia de Google. Máxima calidad, requiere más RAM.';
+
+  @override
+  String export_header(String date) {
+    return '*Exportado de LocalMind — $date*';
+  }
+
+  @override
+  String get export_role_user => '## 👤 Usuario';
+
+  @override
+  String get export_role_assistant => '## 🤖 Asistente';
+
+  @override
+  String get export_role_system => '## ⚙️ Sistema';
+
+  @override
+  String get export_role_tool => '## 🔧 Herramienta';
+
+  @override
+  String get export_text_user => '[USUARIO]';
+
+  @override
+  String get export_text_assistant => '[ASISTENTE]';
+
+  @override
+  String get export_text_system => '[SISTEMA]';
+
+  @override
+  String get export_text_tool => '[HERRAMIENTA]';
+
+  @override
+  String get export_label_user => 'USUARIO';
+
+  @override
+  String get export_label_assistant => 'ASISTENTE';
+
+  @override
+  String get export_label_system => 'SISTEMA';
+
+  @override
+  String get export_label_tool => 'HERRAMIENTA';
+
+  @override
+  String get select_model_hint => 'Seleccione un modelo para empezar a chatear';
+
+  @override
+  String get test_notification_title => 'Notificación de prueba';
+
+  @override
+  String get test_notification_body =>
+      'Esta es una notificación de prueba para el progreso de descarga de modelos.';
+
+  @override
+  String get tts_supports_background =>
+      'Soporta reproducción en segundo plano como audio nativo';
+
+  @override
+  String get tts_other_services_background_note =>
+      'Nota: Los otros servicios de TTS soportan reproducción en segundo plano como audio nativo.';
+
+  @override
+  String get gguf_imported_models_title => 'Imported GGUF models';
+
+  @override
+  String get gguf_imported_models_empty_subtitle =>
+      'Import a GGUF from your device or add one from Hugging Face. Imported models run locally with llama.cpp.';
+
+  @override
+  String get gguf_imported_models_ready =>
+      'imported models ready for local inference.';
+
+  @override
+  String get gguf_curated_models_subtitle =>
+      'Curated on-device models you can download and manage inside LocalMind.';
+
+  @override
+  String get gguf_only_supported =>
+      'Only GGUF models are supported for this import.';
+
+  @override
+  String get gguf_imported_from_local_file => 'imported from local file.';
+
+  @override
+  String get gguf_import_failed => 'Failed to import GGUF model';
+
+  @override
+  String get gguf_imported_from_huggingface => 'imported from Hugging Face.';
+
+  @override
+  String get gguf_import_canceled => 'GGUF import canceled.';
+
+  @override
+  String get gguf_enter_huggingface_url => 'Enter a Hugging Face GGUF URL.';
+
+  @override
+  String get gguf_only_official_huggingface_urls =>
+      'Only official Hugging Face GGUF URLs are supported.';
+
+  @override
+  String get gguf_use_https_url =>
+      'Use an HTTPS Hugging Face URL for GGUF import.';
+
+  @override
+  String get gguf_url_must_point_to_file =>
+      'The Hugging Face URL must point directly to a .gguf file.';
+
+  @override
+  String get gguf_unable_to_detect_file_name =>
+      'Unable to determine the GGUF file name.';
+
+  @override
+  String get gguf_download_empty =>
+      'The downloaded GGUF file was empty or missing.';
+
+  @override
+  String get gguf_selected_file_missing =>
+      'Selected model file does not exist.';
+
+  @override
+  String get gguf_import_action => 'Import GGUF';
+
+  @override
+  String get gguf_overview_title => 'Bring your own GGUF models';
+
+  @override
+  String get gguf_overview_subtitle =>
+      'Import a .gguf from local storage or download one straight from Hugging Face. Imported models stay on this device and load with llama.cpp.';
+
+  @override
+  String get gguf_imported_count_label => 'imported';
+
+  @override
+  String get gguf_local_files_label => 'local files';
+
+  @override
+  String get gguf_huggingface_label => 'Hugging Face';
+
+  @override
+  String get gguf_import_local_title => 'Import local GGUF';
+
+  @override
+  String get gguf_import_local_subtitle => 'Copy a .gguf file from this device';
+
+  @override
+  String get gguf_import_huggingface_title => 'Import from Hugging Face';
+
+  @override
+  String get gguf_import_huggingface_subtitle =>
+      'Paste a GGUF URL or repo path';
+
+  @override
+  String get gguf_no_imported_title => 'No imported GGUF models yet';
+
+  @override
+  String get gguf_no_imported_subtitle =>
+      'You can bring your own GGUF file from device storage or paste a Hugging Face URL or repo path that points to a .gguf file.';
+
+  @override
+  String get gguf_import_huggingface_dialog_title =>
+      'Import GGUF from Hugging Face';
+
+  @override
+  String get gguf_import_huggingface_dialog_subtitle =>
+      'Paste a direct GGUF URL or a Hugging Face repo path like `owner/repo/blob/main/model.gguf`. Blob links are converted automatically.';
+
+  @override
+  String get gguf_url_or_repo_path => 'GGUF URL or repo path';
+
+  @override
+  String get paste => 'Paste';
+
+  @override
+  String get gguf_browse => 'Browse GGUFs';
+
+  @override
+  String get gguf_huggingface_token_ready => 'Hugging Face token ready';
+
+  @override
+  String get gguf_huggingface_token_optional =>
+      'Token optional but recommended';
+
+  @override
+  String get gguf_huggingface_token_ready_desc =>
+      'Your saved token will be used automatically for gated or private repositories.';
+
+  @override
+  String get gguf_huggingface_token_optional_desc =>
+      'Requires a Hugging Face token. Add one in Settings if this GGUF is gated or private.';
+
+  @override
+  String get gguf_downloading => 'Downloading GGUF';
+
+  @override
+  String get gguf_preparing => 'Preparing';
+
+  @override
+  String get gguf_preparing_download => 'Preparing download...';
+
+  @override
+  String get gguf_cancel_import => 'Cancel import';
+
+  @override
+  String get clipboard_empty => 'Clipboard is empty.';
+
+  @override
+  String get could_not_open_huggingface => 'Could not open Hugging Face.';
+
+  @override
+  String get gguf_paste_url_error =>
+      'Paste a Hugging Face GGUF URL or repo path.';
+
+  @override
+  String get gguf_blob_link => 'Blob link';
+
+  @override
+  String get gguf_repository_label => 'Repository';
+
+  @override
+  String get gguf_detected_path_label => 'Detected path';
+
+  @override
+  String get gguf_imported_section_label => 'Imported GGUF';
+
+  @override
+  String get gguf_already_available => 'Already available on this device';
+
+  @override
+  String get gguf_curated_models_short => 'Curated on-device models';
+
+  @override
+  String get gguf_vision_projector => 'Vision Projector';
+
+  @override
+  String get gguf_attach_projector => 'Attach Vision Projector';
+
+  @override
+  String get gguf_change_projector => 'Change Vision Projector';
+
+  @override
+  String get gguf_remove_projector => 'Remove Projector';
+
+  @override
+  String get gguf_projector_attached =>
+      'Vision projector attached successfully';
+
+  @override
+  String get gguf_projector_removed => 'Vision projector removed';
+
+  @override
+  String gguf_projector_auto_detected(String name) {
+    return 'Auto-detected and linked vision projector: $name';
+  }
+
+  @override
+  String get gguf_is_projector_file =>
+      'The selected file is a vision projector (mmproj), not a standalone model.';
+
+  @override
+  String get gguf_projector_url_label =>
+      'Vision Projector URL (optional mmproj)';
+
+  @override
+  String get gguf_projector_url_hint =>
+      'https://huggingface.co/.../mmproj-...gguf';
+
+  @override
+  String get gguf_vision_not_supported_error =>
+      'The active model does not support image attachments. Please attach a vision projector (mmproj) or select a vision-supported model.';
+
+  @override
+  String get execute_tool_title => 'Execute Tool';
+
+  @override
+  String get execute_tool_request_desc =>
+      'The model is requesting to execute the following tool:';
+
+  @override
+  String get reject => 'Reject';
+
+  @override
+  String get approve => 'Approve';
+
+  @override
+  String get server_type_help =>
+      'Pick the provider before filling connection details.';
+
+  @override
+  String get server_identity_title => 'Identity';
+
+  @override
+  String get server_identity_desc =>
+      'Name this server and choose how it appears in the list.';
+
+  @override
+  String get server_connection_title => 'Connection';
+
+  @override
+  String get server_connection_desc =>
+      'Use the address and port exposed by your server.';
+
+  @override
+  String get server_authentication_title => 'Authentication';
+
+  @override
+  String get server_authentication_required_desc =>
+      'OpenRouter requires an API key before testing.';
+
+  @override
+  String get server_authentication_required_desc_requesty =>
+      'Requesty requires an API key before testing.';
+
+  @override
+  String get server_authentication_optional_desc =>
+      'Leave the API key empty if this server does not require one.';
+
+  @override
+  String get mcp_tools_title => 'MCP Tools';
+
+  @override
+  String get available_tools => 'Available tools';
+
+  @override
+  String get unable_load_tools => 'Unable to load tools';
+
+  @override
+  String get no_tools_registered => 'No tools registered';
+
+  @override
+  String get no_tools_registered_desc =>
+      'Enable the example MCP server or add MCP integrations from chat settings.';
+
+  @override
+  String get example_mcp_server_title => 'Example MCP server';
+
+  @override
+  String get example_mcp_server_desc =>
+      'Registers example.echo and example.word_count through the same MCP tool provider used by external servers.';
+
+  @override
+  String get disable_example_server => 'Disable example server';
+
+  @override
+  String get enable_example_server => 'Enable example server';
+
+  @override
+  String get built_in_label => 'Built-in';
+
+  @override
+  String get highlights_label => 'Highlights';
+
+  @override
+  String get built_with_label => 'Built with';
+
+  @override
+  String get local_label => 'Local';
+
+  @override
+  String get gguf_format_label => 'GGUF';
+
+  @override
+  String get tool_status_requested => 'Requested';
+
+  @override
+  String get tool_status_approved => 'Approved';
+
+  @override
+  String get tool_status_rejected => 'Rejected';
+
+  @override
+  String get tool_status_running => 'Running';
+
+  @override
+  String get tool_status_done => 'Done';
+
+  @override
+  String get tool_status_failed => 'Failed';
+
+  @override
+  String get model_favorite_toggle => 'Alternar favorito';
+
+  @override
+  String get model_set_default => 'Establecer como modelo predeterminado';
+
+  @override
+  String get model_clear_default => 'Quitar como modelo predeterminado';
+
+  @override
+  String get model_default_badge => 'Predeterminado';
+
+  @override
+  String get model_note_label => 'Nota';
+
+  @override
+  String get model_note_hint => 'Añade una nota privada para este modelo...';
+
+  @override
+  String get unload_models_before_load => 'Descargar modelos antes de cargar';
+
+  @override
+  String get temp_chat_keyboard_incognito =>
+      'Teclado de incógnito en chat temporal';
+
+  @override
+  String get temp_chat_keyboard_incognito_desc =>
+      'Solicitar al teclado del sistema que no guarde el historial de escritura durante los chats temporales';
+
+  @override
+  String get resume_last_chat => 'Reanudar último chat';
+
+  @override
+  String get resume_last_chat_desc =>
+      'Abrir automáticamente tu última conversación activa al iniciar';
+
+  @override
+  String get export_all_data => 'Exportar todos los datos';
+
+  @override
+  String get import_all_data => 'Importar todos los datos';
+
+  @override
+  String get export_data_success => 'Datos exportados con éxito';
+
+  @override
+  String get import_data_success => 'Datos importados con éxito';
+
+  @override
+  String import_data_failed(String error) {
+    return 'Error al importar datos';
+  }
+
+  @override
+  String get import_data_confirm =>
+      'Esto reemplazará todos tus datos actuales con los datos importados. ¿Continuar?';
+
+  @override
+  String get import_settings_confirm =>
+      'Esto reemplazará tu configuración actual con la configuración importada. ¿Continuar?';
+
+  @override
+  String get export_conversations => 'Exportar conversaciones';
+
+  @override
+  String get import_conversations => 'Importar conversaciones';
+
+  @override
+  String get export_personas => 'Exportar personajes';
+
+  @override
+  String get import_personas => 'Importar personajes';
+
+  @override
+  String get export_settings => 'Exportar configuración';
+
+  @override
+  String get import_settings => 'Importar configuración';
+
+  @override
+  String get export_all_zip => 'Exportar todo (ZIP)';
+
+  @override
+  String get import_all_zip => 'Importar todo (ZIP)';
+
+  @override
+  String get duplicate_chat => 'Duplicar chat';
+
+  @override
+  String get duplicate_chat_success => 'Chat duplicado con éxito';
+
+  @override
+  String get move_to_folder => 'Mover a carpeta';
+
+  @override
+  String get remove_from_folder => 'Eliminar de la carpeta';
+
+  @override
+  String get create_folder => 'Crear carpeta';
+
+  @override
+  String get new_folder => 'Nueva carpeta';
+
+  @override
+  String get folder_name_hint => 'Introduce el nombre de la carpeta...';
+
+  @override
+  String get all_chats => 'Todos los chats';
+
+  @override
+  String get unfiled_chats => 'Chats sin archivar';
+
+  @override
+  String get create => 'Crear';
+
+  @override
+  String get server_path_prefix_label => 'Prefijo de ruta del servidor';
+
+  @override
+  String get server_path_prefix_hint =>
+      'Prefijo opcional para las rutas de la API del servidor (por ejemplo, /v1)';
+
+  @override
+  String get search_message_contents => 'Buscar contenidos de mensajes...';
+
+  @override
+  String get message_search_results => 'Resultados de búsqueda de mensajes';
+
+  @override
+  String get saved_messages_title => 'Mensajes Guardados';
+
+  @override
+  String get nav_saved_messages => 'Mensajes guardados';
+
+  @override
+  String get saved_messages_empty => 'No hay mensajes guardados todavía';
+
+  @override
+  String get save_message => 'Guardar mensaje';
+
+  @override
+  String get message_saved => 'Mensaje guardado';
+
+  @override
+  String token_count(int count) {
+    return 'Tokens: $count';
+  }
+
+  @override
+  String estimated_token_count(int count) {
+    return 'Tokens estimados: $count';
+  }
+
+  @override
+  String get test_tts_section_title => 'Prueba de Texto a Voz';
+
+  @override
+  String get test_tts_hint => 'Escribe algo para probar la voz...';
+
+  @override
+  String get test_speak_button => 'Hablar';
+
+  @override
+  String get scroll_to_bottom => 'Desplazarse hacia abajo';
+
+  @override
+  String get generate_ai_response => 'Generar respuesta de IA';
+
+  @override
+  String get no_response => 'Sin respuesta';
+
+  @override
+  String get export => 'Exportar';
+
+  @override
+  String get import => 'Importar';
+
+  @override
+  String get conversations_label => 'Conversaciones';
+
+  @override
+  String get personas_label => 'Personajes';
+
+  @override
+  String get settings_label => 'Configuración';
+
+  @override
+  String get export_conversation => 'Exportar conversación';
+
+  @override
+  String get tts_process_markdown => 'Procesar Markdown';
+
+  @override
+  String get tts_process_markdown_desc =>
+      'Eliminar formato como **negrita** antes de leer en voz alta';
+
+  @override
+  String get tts_skip_seconds => 'Segundos a omitir';
+
+  @override
+  String get tts_skip_seconds_desc =>
+      'Tiempo para saltar hacia adelante/atrás en el reproductor de voz';
+
+  @override
+  String tts_skip_seconds_value(int seconds) {
+    return '${seconds}s';
+  }
+
+  @override
+  String get preview_system_prompts => 'Vista previa de prompts del sistema';
+
+  @override
+  String get welcome_message_1 => '¡Hola! Soy tu asistente de IA local.';
+
+  @override
+  String get welcome_message_2 =>
+      'Pregúntame lo que quieras, estoy listo cuando tú lo estés.';
+
+  @override
+  String get welcome_message_3 =>
+      'Tus datos se procesan localmente y nunca salen de tu dispositivo.';
+
+  @override
+  String get welcome_message_4 =>
+      'Para empezar, selecciona un modelo en la barra superior o añade uno en la sección de administración de modelos.';
+
+  @override
+  String get temporary_chat => 'Chat temporal';
+
+  @override
+  String get temporary_chat_desc =>
+      'Los mensajes de este chat no se guardarán en el historial';
+
+  @override
+  String get temporary_chat_banner =>
+      'Chat Temporal Activo — No se guardará en el historial';
+
+  @override
+  String get temporary_chat_save_warning_title => '¿Guardar chat temporal?';
+
+  @override
+  String get temporary_chat_save_warning_body =>
+      'Este chat no está guardado en tu historial. ¿Quieres guardarlo ahora?';
+
+  @override
+  String get save_to_history => 'Guardar en el historial';
+
+  @override
+  String get share_conversation => 'Compartir conversación';
+
+  @override
+  String get download_tts_audio => 'Descargar audio de voz';
+
+  @override
+  String get tts_download_unavailable => 'Descarga de voz no disponible';
+
+  @override
+  String get tts_download_no_audio => 'No hay audio generado para descargar';
+
+  @override
+  String get tts_download_success => 'Audio de voz guardado con éxito';
+
+  @override
+  String get return_to_chat => 'Volver al chat';
+
+  @override
+  String get return_to_temp_chat => 'Volver al chat temporal';
+
+  @override
+  String get insert_saved_message => 'Insertar mensaje guardado';
+
+  @override
+  String get insert_saved_message_desc =>
+      'Añade un fragmento de tus mensajes guardados al chat';
+
+  @override
+  String get model_info => 'Información del modelo';
+
+  @override
+  String get model_name => 'Nombre del modelo';
+
+  @override
+  String get model_identifier => 'Identificador del modelo';
+
+  @override
+  String get model_capabilities => 'Capacidades';
+
+  @override
+  String get model_api_pricing => 'Precios de API (por millón de tokens)';
+
+  @override
+  String get not_available => 'No disponible';
+
+  @override
+  String get save_message_folders => 'Guardar en carpetas';
+
+  @override
+  String get remove_from_saved => 'Eliminar de guardados';
+
+  @override
+  String get message_already_saved => 'El mensaje ya está guardado';
+
+  @override
+  String get stream_ttft => 'Tiempo hasta el primer token';
+
+  @override
+  String get stream_tokens_per_sec => 'Tokens por segundo';
+
+  @override
+  String get stream_stop_reason => 'Razón de parada';
+
+  @override
+  String get stream_input_tokens => 'Tokens de entrada';
+
+  @override
+  String get stream_output_tokens => 'Tokens de salida';
+
+  @override
+  String get stream_generation_time => 'Tiempo de generación';
+
+  @override
+  String get attach_image => 'Adjuntar imagen';
+
+  @override
+  String get attach_text_document => 'Adjuntar documento de texto';
+
+  @override
+  String get attach_shortcut_images => 'Fotos';
+
+  @override
+  String get attach_shortcut_documents => 'Archivos';
+
+  @override
+  String get attach_shortcut_saved => 'Guardados';
+
+  @override
+  String get add_attachment => 'Añadir adjunto';
+
+  @override
+  String get add_to_chat => 'Añadir al chat';
+
+  @override
+  String get choose_what_to_attach => '¿Qué te gustaría añadir?';
+
+  @override
+  String get choose_attachment_subtitle =>
+      'Elige una fuente para adjuntar a tu mensaje';
+
+  @override
+  String get photo_permission_denied => 'Permiso de fotos denegado';
+
+  @override
+  String get select_model_prompt => 'Seleccionar modelo';
+
+  @override
+  String get characters_label => 'Caracteres';
+
+  @override
+  String get exit_temporary_chat_title => '¿Salir del chat temporal?';
+
+  @override
+  String get exit_temporary_chat_body =>
+      'Esto eliminará permanentemente la conversación actual. ¿Continuar?';
+
+  @override
+  String get saved_message_temp_snap_unavailable =>
+      'Las capturas de mensajes no están disponibles en chats temporales';
+
+  @override
+  String get filter_title => 'Filtrar chats';
+
+  @override
+  String get filter_pinned => 'Fijados';
+
+  @override
+  String get filter_archived => 'Archivados';
+
+  @override
+  String get filter_temp_chats => 'Chats temporales';
+
+  @override
+  String get filter_user_messages => 'Mensajes de usuario';
+
+  @override
+  String get filter_assistant_messages => 'Mensajes de asistente';
+
+  @override
+  String get archive_chat => 'Archivar chat';
+
+  @override
+  String get unarchive_chat => 'Desarchivar chat';
+
+  @override
+  String conversation_message_count(int count) {
+    return '$count mensajes';
+  }
+
+  @override
+  String conversation_character_count(int count) {
+    return '$count caracteres';
+  }
+
+  @override
+  String get generate_title_with_ai => 'Generar título con IA';
+
+  @override
+  String get generating_title => 'Generando título...';
+
+  @override
+  String get generate_title_failed => 'No se pudo generar un título';
+
+  @override
+  String get lm_studio_model_browser_title => 'Navegador de Modelos';
+
+  @override
+  String get lm_studio_model_search_hint => 'Buscar modelos...';
+
+  @override
+  String get lm_studio_staff_picks => 'Selección del equipo';
+
+  @override
+  String get lm_studio_community_models => 'Modelos de la comunidad';
+
+  @override
+  String get lm_studio_no_models => 'No se encontraron modelos';
+
+  @override
+  String lm_studio_models_count(int count) {
+    return '$count modelos';
+  }
+
+  @override
+  String get lm_studio_browse_models => 'Buscar modelos en LM Studio';
+
+  @override
+  String get lm_studio_model_search => 'Búsqueda de modelos';
+
+  @override
+  String get lm_studio_downloads_title => 'Descargas';
+
+  @override
+  String get lm_studio_choose_quant => 'Elegir cuantización';
+
+  @override
+  String get lm_studio_use_default_quant => 'Usar cuantización predeterminada';
+
+  @override
+  String get lm_studio_recommended => 'Recomendado';
+
+  @override
+  String get lm_studio_clear_downloads => 'Limpiar descargas completadas';
+
+  @override
+  String get lm_studio_no_downloads => 'No hay descargas activas';
+
+  @override
+  String get lm_studio_downloads_disclaimer =>
+      'Las descargas de modelos se realizan directamente desde Hugging Face.';
+
+  @override
+  String get lm_studio_staff_pick => 'Selección destacada';
+
+  @override
+  String get lm_studio_params => 'Parámetros';
+
+  @override
+  String get lm_studio_arch => 'Arquitectura';
+
+  @override
+  String get lm_studio_domain => 'Dominio';
+
+  @override
+  String get lm_studio_format => 'Formato';
+
+  @override
+  String get lm_studio_vision => 'Visión';
+
+  @override
+  String get lm_studio_tool_use => 'Uso de herramientas';
+
+  @override
+  String get lm_studio_reasoning => 'Razonamiento';
+
+  @override
+  String get openrouter_pricing_free => 'Gratis';
+
+  @override
+  String openrouter_pricing_tooltip(String input, String output) {
+    return 'Entrada $input / Salida $output por millón de tokens';
+  }
+
+  @override
+  String get lm_studio_download_options => 'Opciones de descarga';
+
+  @override
+  String get lm_studio_download => 'Descargar';
+
+  @override
+  String lm_studio_download_size(String size) {
+    return 'Tamaño de descarga';
+  }
+
+  @override
+  String lm_studio_downloading_percent(int percent) {
+    return 'Descargando: $percent%';
+  }
+
+  @override
+  String get lm_studio_readme_unavailable =>
+      'README no disponible para este modelo.';
+
+  @override
+  String get lm_studio_full_gpu_offload => 'Descarga completa de GPU posible';
+
+  @override
+  String get lm_studio_partial_gpu_offload => 'Descarga parcial de GPU posible';
+
+  @override
+  String get lm_studio_likely_too_large => 'Probablemente demasiado grande';
+
+  @override
+  String get lm_studio_available_ram_gb => 'RAM disponible (GB, opcional)';
+
+  @override
+  String get lm_studio_available_vram_gb => 'VRAM disponible (GB, opcional)';
+
+  @override
+  String get lm_studio_memory_settings_title => 'Memoria para recomendaciones';
+
+  @override
+  String get lm_studio_memory_settings_desc =>
+      'Se utiliza para estimar si los modelos caben en tu máquina en el explorador de modelos.';
+
+  @override
+  String get think_button_label => 'Pensar';
+
+  @override
+  String get thinking_mode_title => 'Modo de pensamiento';
+
+  @override
+  String get reasoning_effort_low => 'Bajo';
+
+  @override
+  String get reasoning_effort_medium => 'Medio';
+
+  @override
+  String get reasoning_effort_high => 'Alto';
+
+  @override
+  String get reasoning_effort_minimal => 'Mínimo';
+
+  @override
+  String get reasoning_effort_xhigh => 'Muy alto';
+
+  @override
+  String get reasoning_effort_max => 'Máximo';
+
+  @override
+  String get reasoning_effort_off => 'Desactivado';
+
+  @override
+  String get could_not_read_file => 'No se pudo leer el archivo';
+
+  @override
+  String get server_offline => 'Servidor sin conexión';
+
+  @override
+  String get could_not_establish_connection =>
+      'No se pudo establecer una conexión con el servidor. Por favor, comprueba si tu servidor está funcionando y si la configuración de host/puerto es correcta.';
+
+  @override
+  String get retry_connection => 'Reintentar conexión';
+
+  @override
+  String get tokens_label => 'Tokens';
+
+  @override
+  String get enter_context_length => 'Introduce la longitud del contexto...';
+
+  @override
+  String get openrouter_disclosure =>
+      'Al conectar este proveedor, tus mensajes de chat y entradas se enviarán a sus servidores. LocalMind no rastrea ni almacena tus conversaciones.';
+
+  @override
+  String get requesty_disclosure =>
+      'Al conectar este proveedor, tus mensajes de chat y entradas se enviarán a sus servidores. LocalMind no rastrea ni almacena tus conversaciones.';
+
+  @override
+  String get welcome_message_cloud =>
+      'Tus mensajes se envían a tu proveedor conectado.';
+
+  @override
+  String get privacy_policy => 'Política de privacidad';
+
+  @override
+  String get cloud_sync => 'Sincronización S3';
+
+  @override
+  String get cloud_sync_description =>
+      'Sincronización cifrada de extremo a extremo con tu servidor compatible con S3';
+
+  @override
+  String get cloud_sync_endpoint => 'URL del endpoint';
+
+  @override
+  String get cloud_sync_bucket => 'Bucket';
+
+  @override
+  String get cloud_sync_region => 'Región';
+
+  @override
+  String get cloud_sync_prefix => 'Prefijo';
+
+  @override
+  String get cloud_sync_access_key => 'ID de clave de acceso';
+
+  @override
+  String get cloud_sync_secret_key => 'Clave de acceso secreta';
+
+  @override
+  String get cloud_sync_session_token => 'Token de sesión (opcional)';
+
+  @override
+  String get cloud_sync_passphrase => 'Frase de cifrado';
+
+  @override
+  String get cloud_sync_confirm_passphrase => 'Confirmar frase';
+
+  @override
+  String get cloud_sync_path_style => 'Usar direccionamiento por ruta';
+
+  @override
+  String get cloud_sync_allow_http => 'Permitir HTTP inseguro';
+
+  @override
+  String get cloud_sync_http_warning =>
+      'HTTP expone metadatos y credenciales a la red. Úsalo solo con un servidor S3 local de confianza.';
+
+  @override
+  String get cloud_sync_test => 'Probar conexión';
+
+  @override
+  String get cloud_sync_enable => 'Activar sincronización cifrada';
+
+  @override
+  String get cloud_sync_now => 'Sincronizar ahora';
+
+  @override
+  String get cloud_sync_disconnect => 'Desconectar este dispositivo';
+
+  @override
+  String get cloud_sync_last_synced => 'Última sincronización';
+
+  @override
+  String get cloud_sync_never => 'Nunca';
+
+  @override
+  String get cloud_sync_conflicts => 'Conflictos conservados';
+
+  @override
+  String get cloud_sync_passphrase_mismatch => 'Las frases no coinciden';
+
+  @override
+  String get crash_report_title => 'Algo salió mal';
+
+  @override
+  String get crash_report_stack_trace => 'Seguimiento de pila';
+
+  @override
+  String get crash_report_tap_to_expand => 'Toca para expandir';
+
+  @override
+  String get crash_report_button => 'Informar de este error';
+
+  @override
+  String get crash_try_again => 'Intentar de nuevo';
+
+  @override
+  String get crash_report_empty_stack => '<vacío>';
+
+  @override
+  String get crash_report_disclaimer =>
+      'Informar abre GitHub con el diagnóstico rellenado de antemano. Tú tienes el control: no se envía nada automáticamente. Revisa y elimina cualquier contenido sensible antes de enviar.';
+
+  @override
+  String get crash_report_copied => 'Copiado al portapapeles';
+
+  @override
+  String get report_a_problem => 'Informar de un problema';
+
+  @override
+  String get rename_folder => 'Renombrar carpeta';
+
+  @override
+  String get delete_folder => 'Eliminar carpeta';
+
+  @override
+  String get delete_folder_title => '¿Eliminar carpeta?';
+
+  @override
+  String delete_folder_body(String name) {
+    return '¿Seguro que quieres eliminar \"$name\"? Las conversaciones o mensajes guardados dentro se moverán a \"Sin clasificar\". No se puede deshacer.';
+  }
+
+  @override
+  String get folder_name_required => 'Introduce un nombre de carpeta';
+
+  @override
+  String get model_required_toast => 'Primero debes seleccionar un modelo';
+
+  @override
+  String get settings_concise_voice_responses =>
+      'Respuestas concisas en modo voz';
+
+  @override
+  String get settings_concise_voice_responses_desc =>
+      'Mantén las respuestas del modelo breves (1 párrafo corto) y haz preguntas de seguimiento en modo voz.';
+
+  @override
+  String get s3_connection_succeeded => 'Conexión a S3 realizada con éxito.';
+
+  @override
+  String failed_to_open_url(String error) {
+    return 'Error al abrir la URL: $error';
+  }
+
+  @override
+  String failed_to_copy(String error) {
+    return 'Error al copiar: $error';
+  }
+
+  @override
+  String get file_explorer_not_found =>
+      'No file explorer found. Please make sure a file manager app is installed and enabled on your device.';
+
+  @override
+  String export_data_failed(String error) {
+    return 'Failed to export backup: $error';
+  }
+
+  @override
+  String file_pick_failed(String error) {
+    return 'Failed to select file: $error';
+  }
+
+  @override
+  String image_pick_failed(String error) {
+    return 'Failed to select image: $error';
+  }
+
+  @override
+  String get calendar_access => 'Calendar Access';
+
+  @override
+  String get calendar_access_desc =>
+      'Allow AI to read and create calendar events';
+
+  @override
+  String get calendar_permission_denied =>
+      'Calendar permission denied. Please grant calendar access in your device settings.';
+
+  @override
+  String get location_access => 'Location Access';
+
+  @override
+  String get location_access_desc =>
+      'Allow AI to get your current location with place name';
+
+  @override
+  String get location_permission_denied =>
+      'Location permission denied. Please grant location access in your device settings.';
+
+  @override
+  String get builtin_ai_not_supported =>
+      'Built-in AI is not supported on this device.';
+
+  @override
+  String get builtin_ai_unsupported_desc =>
+      'Your device hardware or OS does not support on-device system AI (e.g. Gemini Nano / Apple Intelligence). Please choose a downloadable model instead.';
+
+  @override
+  String get builtin_ai_unsupported_chip => 'Not Supported';
+
+  @override
+  String get builtin_ai_enable => 'Enable';
+
+  @override
+  String get model_reasoning_default => 'Predeterminado del modelo';
+
+  @override
+  String get model_reasoning_on => 'Activado';
+
+  @override
+  String get model_reasoning_help =>
+      'Se aplica a la siguiente respuesta. Desactivado impide el razonamiento si la plantilla de chat del modelo lo permite.';
+
+  @override
+  String get model_reasoning_save_error =>
+      'No se pudo guardar el modo de razonamiento. Inténtalo de nuevo.';
+
+  @override
+  String get on_device_engine_failed_error =>
+      'El modelo en el dispositivo dejó de responder, normalmente porque la conversación superó su ventana de contexto. El modelo se está recargando. Inténtalo de nuevo, inicia un chat nuevo o aumenta la longitud de contexto en los ajustes.';
+
+  @override
+  String get stt_error_no_match =>
+      'No se reconoció ninguna voz. Toca para intentarlo de nuevo.';
+
+  @override
+  String get stt_error_speech_timeout =>
+      'No se detectó voz. Toca para intentarlo de nuevo.';
+
+  @override
+  String get stt_error_permission => 'Permiso de micrófono denegado.';
+
+  @override
+  String get stt_error_busy =>
+      'El reconocimiento de voz está ocupado. Inténtalo de nuevo.';
+
+  @override
+  String get stt_error_network =>
+      'Error de red. Comprueba tu conexión e inténtalo de nuevo.';
+
+  @override
+  String get stt_error_audio =>
+      'Error de grabación de audio. Revisa tu micrófono.';
+
+  @override
+  String get stt_error_client =>
+      'No se pudo iniciar el servicio de reconocimiento de voz. Asegúrate de tener instalada una app de entrada de voz configurada como reconocedor predeterminado e inténtalo de nuevo.';
+
+  @override
+  String get stt_error_language =>
+      'El reconocedor de voz de este dispositivo no admite tu idioma.';
+
+  @override
+  String get stt_error_unavailable =>
+      'No se encontró ningún servicio de reconocimiento de voz en este dispositivo. Instala una app de entrada de voz (por ejemplo FUTO Voice Input) y configúrala como reconocedor predeterminado.';
+
+  @override
+  String stt_error_generic(String code) {
+    return 'Error de reconocimiento de voz: $code';
+  }
+
+  @override
+  String get send_temperature_to_api => 'Enviar temperatura';
+
+  @override
+  String get send_top_p_to_api => 'Enviar Top P';
+
+  @override
+  String get send_sampling_params_desc =>
+      'Desactívalo para proveedores o modelos que rechazan este parámetro (por ejemplo, algunos modelos de razonamiento). Se aplica a todos los chats con servidores remotos.';
+
+  @override
+  String get default_system_prompt => 'Prompt de sistema predeterminado';
+
+  @override
+  String get default_system_prompt_desc =>
+      'Se usa en chats sin persona ni prompt de sistema propio.';
+
+  @override
+  String get default_system_prompt_hint => 'Eres un asistente útil…';
+
+  @override
+  String background_generation_notice(String title) {
+    return 'Aún respondiendo en \"$title\". Podrás enviar aquí cuando termine. Toca para abrir.';
+  }
+
+  @override
+  String get background_generation_notice_untitled =>
+      'Otro chat aún está respondiendo. Podrás enviar aquí cuando termine. Toca para abrir.';
+
+  @override
+  String background_generation_notice_info(String title) {
+    return 'Respondiendo en \"$title\" en segundo plano. Toca para abrir.';
+  }
+
+  @override
+  String get background_generation_notice_info_untitled =>
+      'Otro chat está respondiendo en segundo plano. Toca para abrir.';
+
+  @override
+  String background_generation_notice_multiple(int count) {
+    return '$count chats están respondiendo en segundo plano.';
+  }
+
+  @override
+  String get background_generation_chat_untitled => 'Chat sin título';
+
+  @override
+  String get model_loaded_status => 'Cargado';
+
+  @override
+  String get new_chat_title => 'Pregunta lo que quieras.';
+
+  @override
+  String get new_chat_on_device_headline => 'Todo se queda en este teléfono.';
+
+  @override
+  String get new_chat_on_device_detail =>
+      'Las respuestas se generan aquí mismo: sin subidas, sin cuenta y sin conexión.';
+
+  @override
+  String new_chat_self_hosted_headline(String server) {
+    return 'Responde $server.';
+  }
+
+  @override
+  String get new_chat_self_hosted_detail =>
+      'Los mensajes van a tu propio servidor, no a terceros.';
+
+  @override
+  String new_chat_endpoint_detail(String server) {
+    return 'Los mensajes se envían a $server, un endpoint compatible con OpenAI.';
+  }
+
+  @override
+  String get new_chat_cloud_headline => 'Respuestas desde la nube.';
+
+  @override
+  String new_chat_router_detail(String provider) {
+    return 'Los mensajes se envían a $provider y al proveedor del modelo al que los dirige.';
+  }
+
+  @override
+  String get new_chat_ollama_cloud_detail =>
+      'Los mensajes se envían al servicio en la nube de Ollama.';
+
+  @override
+  String get new_chat_no_server_headline => 'Elige un modelo para empezar.';
+
+  @override
+  String get new_chat_no_server_detail =>
+      'Ejecuta uno en este teléfono o conecta un servidor.';
+
+  @override
+  String get new_chat_works_offline => 'Funciona sin conexión';
+
+  @override
+  String get new_chat_no_model => 'Ningún modelo seleccionado';
+
+  @override
+  String get new_chat_not_connected => 'Sin conexión';
+
+  @override
+  String get attach_send_as_assistant => 'Enviar como asistente';
+
+  @override
+  String get attach_send_as_assistant_desc =>
+      'Añade tu mensaje como respuesta; no se genera nada.';
+
+  @override
+  String get chat_input_hint_assistant => 'Escribe la respuesta del asistente';
+
+  @override
+  String get settings_section_general => 'General';
+
+  @override
+  String get settings_section_chat => 'Chat';
+
+  @override
+  String get settings_section_voice => 'Voz';
+
+  @override
+  String get settings_section_models => 'Modelos';
+
+  @override
+  String get settings_section_data => 'Privacidad y datos';
+
+  @override
+  String get settings_search_hint => 'Buscar ajustes';
+
+  @override
+  String get settings_more_chat_options => 'Más opciones de chat';
+
+  @override
+  String get settings_group_replies => 'Respuestas';
+
+  @override
+  String get settings_group_prompt => 'Prompt del sistema y parámetros';
+
+  @override
+  String get settings_group_composer => 'Redacción';
+
+  @override
+  String get sidebar_section_chats => 'Chats';
+
+  @override
+  String get sidebar_section_models => 'Modelos';
+
+  @override
+  String get sidebar_section_app => 'App';
+
+  @override
+  String get model_still_stopping =>
+      'El modelo todavía se está deteniendo. Espera antes de volver a intentarlo.';
+
+  @override
+  String get localApiTitle => 'Local API';
+
+  @override
+  String get localApiIntro =>
+      'Use your loaded model in other apps with an OpenAI-compatible API. Start the server before switching apps.';
+
+  @override
+  String get localApiRunning => 'Local API is running';
+
+  @override
+  String get localApiStopped => 'Server stopped';
+
+  @override
+  String get localApiStarting => 'Starting server…';
+
+  @override
+  String get localApiStopping => 'Stopping server…';
+
+  @override
+  String get localApiRotating => 'Replacing API key…';
+
+  @override
+  String get localApiModelRequired =>
+      'Load a downloaded LiteRT or imported GGUF model first.';
+
+  @override
+  String get localApiInvalidPort => 'Enter a port from 1024 to 65535.';
+
+  @override
+  String get localApiStartFailed =>
+      'Android could not start the server. Try again while LocalMind is open.';
+
+  @override
+  String get localApiPortUnavailable =>
+      'Could not listen on this port. Try another port.';
+
+  @override
+  String get localApiKeyFailed => 'Could not access the API key.';
+
+  @override
+  String get localApiModelId => 'Model ID';
+
+  @override
+  String get localApiTextAndTools => 'Text and tool calls';
+
+  @override
+  String get localApiTextOnly => 'Text only';
+
+  @override
+  String get localApiPort => 'Port';
+
+  @override
+  String get localApiLan => 'Allow other devices on the local network';
+
+  @override
+  String get localApiLanHint =>
+      'Use this only on a trusted network. HTTP does not encrypt prompts or the API key.';
+
+  @override
+  String get localApiStart => 'Start server';
+
+  @override
+  String get localApiStop => 'Stop server';
+
+  @override
+  String get localApiUrl => 'Same-device base URL';
+
+  @override
+  String get localApiLanUrl => 'Local network base URL';
+
+  @override
+  String get localApiNoLan => 'No local network address is available.';
+
+  @override
+  String get localApiKey => 'API key';
+
+  @override
+  String get localApiShowKey => 'Show API key';
+
+  @override
+  String get localApiHideKey => 'Hide API key';
+
+  @override
+  String get localApiRotateKey => 'Replace API key';
+
+  @override
+  String get localApiRotateHint =>
+      'The current key will stop working. Update your connected apps with the new key.';
+
+  @override
+  String localApiCopy(String label) {
+    return 'Copy $label';
+  }
+
+  @override
+  String get localApiCopied => 'Copied to clipboard';
+
+  @override
+  String get image_generation => 'Generación de imágenes';
+
+  @override
+  String get image_model_ids => 'ID de modelos de imagen';
+
+  @override
+  String get image_model_ids_hint =>
+      'Separa los ID personalizados con comas o saltos de línea.';
+
+  @override
+  String get image_generation_prompt => 'Describe la imagen que quieres crear';
+
+  @override
+  String get image_generation_temporary =>
+      'Puedes generar imágenes en chats guardados. Inicia un chat guardado para crear una imagen.';
+
+  @override
+  String get image_generation_remove_attachments =>
+      'Elimina los archivos adjuntos antes de generar una imagen.';
+
+  @override
+  String get image_generation_unavailable =>
+      'This server or model does not expose a compatible Images API. Check the server URL and model ID.';
+
+  @override
+  String get image_generation_auth =>
+      'Check the API key and whether it can access this image model.';
+
+  @override
+  String get image_generation_quota =>
+      'The provider reached its rate limit or quota. Check your account before retrying.';
+
+  @override
+  String get image_generation_rejected =>
+      'The provider rejected the image request. Check the prompt and try again.';
+
+  @override
+  String get image_generation_timeout =>
+      'Image generation timed out. Try again when the provider is available.';
+
+  @override
+  String get image_generation_invalid =>
+      'The provider returned an invalid or unsupported image.';
+
+  @override
+  String get image_generation_failed =>
+      'Could not generate an image. Check the connection and try again.';
+
+  @override
+  String get image_generation_save_failed =>
+      'Could not save the generated image. Check available storage and try again.';
+
+  @override
+  String get image_generation_share => 'Compartir imagen';
+}

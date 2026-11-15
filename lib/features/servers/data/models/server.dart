@@ -1,0 +1,359 @@
+import '../../../../core/constants/app_constants.dart';
+import '../../../../core/models/enums.dart';
+
+bool _hasExplicitHttpScheme(String input) {
+  final trimmed = input.trim().toLowerCase();
+  return trimmed.startsWith('http://') || trimmed.startsWith('https://');
+}
+
+Uri? parseServerAddressInput(String input) {
+  final trimmed = input.trim();
+  if (trimmed.isEmpty) return null;
+
+  final candidate = _hasExplicitHttpScheme(trimmed)
+      ? trimmed
+      : 'http://$trimmed';
+  final uri = Uri.tryParse(candidate);
+  if (uri == null || uri.host.isEmpty) return null;
+  if (uri.scheme != 'http' && uri.scheme != 'https') return null;
+  if (uri.hasQuery || uri.hasFragment) return null;
+  return uri;
+}
+
+/// Extracts a normalized path prefix from a parsed URI.
+/// Returns `''` for empty path, root `/`, or paths with trailing slashes.
+/// Returns the path as-is otherwise (e.g. `/ollama`).
+String extractPathPrefix(Uri uri) {
+  return normalizeServerPathPrefix(uri.path.isEmpty ? '' : uri.path);
+}
+
+bool isHttpsAddressInput(String input) {
+  return input.trim().toLowerCase().startsWith('https://');
+}
+
+Uri _normalizeNetworkUri(Uri uri, {int? port}) {
+  return Uri(
+    scheme: uri.scheme,
+    userInfo: uri.userInfo,
+    host: uri.host,
+    port: port ?? (uri.hasPort ? uri.port : null),
+  );
+}
+
+String displayServerAddress(
+  String host,
+  int port,
+  ServerType type, [
+  String? pathPrefix,
+]) {
+  if (type == ServerType.openRouter) {
+    return 'openrouter.ai';
+  }
+  if (type == ServerType.requesty) {
+    return 'router.requesty.ai';
+  }
+  if (type == ServerType.ollamaCloud) {
+    return 'ollama.com';
+  }
+  if (type == ServerType.onDevice) {
+    return 'Local inference';
+  }
+
+  final trimmedHost = host.trim();
+  final prefix = normalizeServerPathPrefix(pathPrefix);
+  if (trimmedHost.isEmpty) {
+    final base = port > 0 ? 'localhost:$port' : 'localhost';
+    return prefix.isNotEmpty ? '$base$prefix' : base;
+  }
+
+  if (_hasExplicitHttpScheme(trimmedHost)) {
+    final uri = parseServerAddressInput(trimmedHost);
+    if (uri != null) {
+      final base = _normalizeNetworkUri(
+        uri,
+        port: uri.hasPort || port <= 0 ? null : port,
+      ).toString();
+      return prefix.isNotEmpty ? '$base$prefix' : base;
+    }
+    return prefix.isNotEmpty ? '$trimmedHost$prefix' : trimmedHost;
+  }
+
+  if (trimmedHost.contains(':')) {
+    return prefix.isNotEmpty ? '$trimmedHost$prefix' : trimmedHost;
+  }
+
+  final base = port > 0 ? '$trimmedHost:$port' : trimmedHost;
+  return prefix.isNotEmpty ? '$base$prefix' : base;
+}
+
+String buildServerBaseUrl(String host, int port, ServerType type) {
+  if (type == ServerType.openRouter) {
+    return 'https://openrouter.ai/api/v1';
+  }
+  if (type == ServerType.requesty) {
+    return AppConstants.requestyBaseUrl;
+  }
+  if (type == ServerType.ollamaCloud) {
+    return AppConstants.ollamaCloudBaseUrl;
+  }
+  if (type == ServerType.onDevice) {
+    return 'on-device';
+  }
+
+  final trimmedHost = host.trim();
+  final uri = parseServerAddressInput(trimmedHost);
+  if (uri != null) {
+    return _normalizeNetworkUri(
+      uri,
+      port: uri.hasPort || port <= 0 ? null : port,
+    ).toString();
+  }
+
+  if (trimmedHost.isEmpty) {
+    return '';
+  }
+
+  if (port <= 0) {
+    return 'http://$trimmedHost';
+  }
+
+  final protocol = (port == 443) ? 'https' : 'http';
+  return '$protocol://$trimmedHost:$port';
+}
+
+/// Authorization header for [server], or an empty map when no key is set so
+/// callers can spread it unconditionally into their headers map.
+Map<String, String> buildServerAuthHeaders(Server server) {
+  if (server.apiKey?.isNotEmpty ?? false) {
+    return {'Authorization': 'Bearer ${server.apiKey}'};
+  }
+  return const {};
+}
+
+String normalizeServerPathPrefix(String? raw) {
+  if (raw == null) return '';
+  var value = raw.trim();
+  if (value.isEmpty) return '';
+  if (!value.startsWith('/')) value = '/$value';
+  while (value.endsWith('/') && value.isNotEmpty) {
+    value = value.substring(0, value.length - 1);
+  }
+  return value;
+}
+
+class Server {
+  final String id;
+  final String name;
+  final ServerType type;
+  final String host;
+  final int port;
+  final String? apiKey;
+  final bool isDefault;
+  final DateTime createdAt;
+  final DateTime lastConnectedAt;
+  final ConnectionStatus status;
+  final String? iconName;
+  final String? pathPrefix;
+
+  /// Optional system RAM in GB for model compatibility hints in the browser.
+  final int? availableRamGb;
+
+  /// Optional GPU VRAM in GB for model compatibility hints in the browser.
+  final int? availableVramGb;
+
+  Server({
+    required this.id,
+    required this.name,
+    required this.type,
+    required this.host,
+    required this.port,
+    this.apiKey,
+    this.isDefault = false,
+    required this.createdAt,
+    required this.lastConnectedAt,
+    this.status = ConnectionStatus.disconnected,
+    this.iconName,
+    this.pathPrefix,
+    this.availableRamGb,
+    this.availableVramGb,
+  });
+
+  String get apiPathPrefix => normalizeServerPathPrefix(pathPrefix);
+
+  String _apiPath(String suffix) {
+    if (apiPathPrefix.isEmpty) {
+      return suffix;
+    }
+    return '$apiPathPrefix$suffix';
+  }
+
+  String get _openAiPrefix {
+    if (apiPathPrefix.isEmpty) {
+      return '/v1';
+    }
+    if (apiPathPrefix.endsWith('/v1')) {
+      return apiPathPrefix;
+    }
+    return '$apiPathPrefix/v1';
+  }
+
+  String get baseUrl {
+    return buildServerBaseUrl(host, port, type);
+  }
+
+  Map<String, String> get authHeaders => buildServerAuthHeaders(this);
+
+  String get chatEndpoint {
+    switch (type) {
+      case ServerType.lmStudio:
+        // LM Studio's native REST endpoint. MCP integrations (both
+        // ephemeral_mcp and plugin) are only supported here, not on the
+        // OpenAI-compatible /v1/chat/completions or /v1/responses endpoints.
+        return '$baseUrl${_apiPath('/api/v1/chat')}';
+      case ServerType.openAICompatible:
+        return '$baseUrl$_openAiPrefix/chat/completions';
+      case ServerType.ollama:
+      case ServerType.ollamaCloud:
+        return '$baseUrl${_apiPath('/api/chat')}';
+      case ServerType.openRouter:
+      case ServerType.requesty:
+        return '$baseUrl/chat/completions';
+      case ServerType.onDevice:
+        return '';
+    }
+  }
+
+  String? get imageGenerationEndpoint => switch (type) {
+    ServerType.openRouter => '$baseUrl/images',
+    ServerType.openAICompatible => '$baseUrl$_openAiPrefix/images/generations',
+    _ => null,
+  };
+
+  String get modelsEndpoint {
+    switch (type) {
+      case ServerType.lmStudio:
+        return '$baseUrl${_apiPath('/api/v1/models')}';
+      case ServerType.openAICompatible:
+        return '$baseUrl$_openAiPrefix/models';
+      case ServerType.ollama:
+      case ServerType.ollamaCloud:
+        return '$baseUrl${_apiPath('/api/tags')}';
+      case ServerType.openRouter:
+      case ServerType.requesty:
+        return '$baseUrl/models';
+      case ServerType.onDevice:
+        return '';
+    }
+  }
+
+  String get runningModelsEndpoint {
+    switch (type) {
+      case ServerType.lmStudio:
+        return '$baseUrl${_apiPath('/api/v1/models')}';
+      case ServerType.openAICompatible:
+        return '$baseUrl$_openAiPrefix/models';
+      case ServerType.ollama:
+        return '$baseUrl${_apiPath('/api/ps')}';
+      case ServerType.ollamaCloud:
+      case ServerType.openRouter:
+      case ServerType.onDevice:
+      case ServerType.requesty:
+        return '';
+    }
+  }
+
+  String get modelDetailsEndpoint {
+    switch (type) {
+      case ServerType.ollama:
+      case ServerType.ollamaCloud:
+        return '$baseUrl${_apiPath('/api/show')}';
+      case ServerType.lmStudio:
+      case ServerType.openAICompatible:
+      case ServerType.openRouter:
+      case ServerType.onDevice:
+      case ServerType.requesty:
+        return '';
+    }
+  }
+
+  String get loadModelEndpoint {
+    switch (type) {
+      case ServerType.lmStudio:
+        return '$baseUrl${_apiPath('/api/v1/models/load')}';
+      case ServerType.openAICompatible:
+        return '$baseUrl$_openAiPrefix/models/load';
+      case ServerType.ollama:
+        return '$baseUrl${_apiPath('/api/generate')}';
+      case ServerType.ollamaCloud:
+      case ServerType.openRouter:
+      case ServerType.onDevice:
+      case ServerType.requesty:
+        return '';
+    }
+  }
+
+  String get unloadModelEndpoint {
+    switch (type) {
+      case ServerType.lmStudio:
+        return '$baseUrl${_apiPath('/api/v1/models/unload')}';
+      case ServerType.openAICompatible:
+        return '$baseUrl$_openAiPrefix/models/unload';
+      case ServerType.ollama:
+        return '$baseUrl${_apiPath('/api/generate')}';
+      case ServerType.ollamaCloud:
+      case ServerType.openRouter:
+      case ServerType.onDevice:
+      case ServerType.requesty:
+        return '';
+    }
+  }
+
+  bool get isOnDevice => type == ServerType.onDevice || id == 'on-device';
+  bool get isOllamaCloud => type == ServerType.ollamaCloud;
+  bool get isOllamaFamily =>
+      type == ServerType.ollama || type == ServerType.ollamaCloud;
+
+  String get displayAddress =>
+      displayServerAddress(host, port, type, pathPrefix);
+
+  Server copyWith({
+    String? id,
+    String? name,
+    ServerType? type,
+    String? host,
+    int? port,
+    String? apiKey,
+    bool? isDefault,
+    DateTime? createdAt,
+    DateTime? lastConnectedAt,
+    ConnectionStatus? status,
+    String? iconName,
+    String? pathPrefix,
+    int? availableRamGb,
+    int? availableVramGb,
+    bool clearPathPrefix = false,
+    bool clearAvailableRamGb = false,
+    bool clearAvailableVramGb = false,
+  }) {
+    return Server(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      type: type ?? this.type,
+      host: host ?? this.host,
+      port: port ?? this.port,
+      apiKey: apiKey ?? this.apiKey,
+      isDefault: isDefault ?? this.isDefault,
+      createdAt: createdAt ?? this.createdAt,
+      lastConnectedAt: lastConnectedAt ?? this.lastConnectedAt,
+      status: status ?? this.status,
+      iconName: iconName ?? this.iconName,
+      pathPrefix: clearPathPrefix ? null : (pathPrefix ?? this.pathPrefix),
+      availableRamGb: clearAvailableRamGb
+          ? null
+          : (availableRamGb ?? this.availableRamGb),
+      availableVramGb: clearAvailableVramGb
+          ? null
+          : (availableVramGb ?? this.availableVramGb),
+    );
+  }
+}

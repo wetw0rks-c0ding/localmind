@@ -1,0 +1,375 @@
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../core/providers/storage_providers.dart';
+import '../../../core/storage/entities.dart';
+import '../../../core/storage/objectbox_store.dart';
+import '../../../objectbox.g.dart';
+import '../data/models/persona.dart';
+import '../utils/persona_prompt_utils.dart';
+
+final personaSearchQueryProvider =
+    NotifierProvider<_PersonaSearchNotifier, String>(
+      _PersonaSearchNotifier.new,
+    );
+
+final selectedPersonasProvider =
+    NotifierProvider<SelectedPersonasNotifier, List<Persona>>(
+      SelectedPersonasNotifier.new,
+    );
+
+/// First selected persona, if any (legacy convenience).
+final selectedPersonaProvider = Provider<Persona?>((ref) {
+  final personas = ref.watch(selectedPersonasProvider);
+  return personas.isEmpty ? null : personas.first;
+});
+
+class SelectedPersonasNotifier extends Notifier<List<Persona>> {
+  @override
+  List<Persona> build() => const [];
+
+  void setPersonas(List<Persona> personas) {
+    state = List.unmodifiable(personas);
+  }
+
+  void toggle(Persona persona) {
+    if (state.any((p) => p.id == persona.id)) {
+      state = state.where((p) => p.id != persona.id).toList();
+    } else {
+      state = [...state, persona];
+    }
+  }
+
+  void clear() {
+    state = const [];
+  }
+}
+
+class _PersonaSearchNotifier extends Notifier<String> {
+  @override
+  String build() => '';
+
+  void setQuery(String q) => state = q;
+  void clear() => state = '';
+}
+
+final personaCategoryFilterProvider =
+    NotifierProvider<_CategoryFilterNotifier, String?>(
+      _CategoryFilterNotifier.new,
+    );
+
+final personaPreviewSystemPromptsProvider =
+    NotifierProvider<_PreviewSystemPromptsNotifier, bool>(
+      _PreviewSystemPromptsNotifier.new,
+    );
+
+class _PreviewSystemPromptsNotifier extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  void toggle() => state = !state;
+  void set(bool value) => state = value;
+}
+
+class _CategoryFilterNotifier extends Notifier<String?> {
+  @override
+  String? build() => null;
+
+  void setCategory(String? cat) => state = cat;
+}
+
+final personasNotifierProvider =
+    AsyncNotifierProvider<PersonasNotifier, List<Persona>>(
+      PersonasNotifier.new,
+    );
+
+class PersonasNotifier extends AsyncNotifier<List<Persona>> {
+  @override
+  Future<List<Persona>> build() async {
+    return _loadAll();
+  }
+
+  /// Seeds built-in personas when the database is first created. Called once
+  /// during app bootstrap so the provider [build] stays a pure read.
+  static void seedIfNeeded(ObjectBoxStore db) {
+    if (db.personaBox.isEmpty()) {
+      for (final preset in builtInPersonas) {
+        db.personaBox.put(PersonaEntity.fromDomain(preset));
+      }
+    }
+  }
+
+  Future<List<Persona>> _loadAll() async {
+    return _loadWithoutSeeding();
+  }
+
+  Future<Persona> createPersona({
+    required String name,
+    required String emoji,
+    required String systemPrompt,
+    String? description,
+    String? category,
+    Map<String, dynamic>? preferredParams,
+  }) async {
+    if (!ref.mounted) {
+      throw StateError('Cannot create persona on unmounted notifier');
+    }
+    final db = ref.read(databaseProvider);
+    final now = DateTime.now();
+    final persona = Persona(
+      id: now.millisecondsSinceEpoch.toString(),
+      name: name,
+      emoji: emoji,
+      systemPrompt: systemPrompt,
+      description: description,
+      isBuiltIn: false,
+      createdAt: now,
+      updatedAt: now,
+      category: category,
+      preferredParams: preferredParams,
+    );
+    db.personaBox.put(PersonaEntity.fromDomain(persona));
+    final data = await _loadAll();
+    if (ref.mounted) {
+      state = AsyncData(data);
+    }
+    return persona;
+  }
+
+  Future<void> updatePersona(Persona updated) async {
+    if (!ref.mounted) return;
+    final db = ref.read(databaseProvider);
+    final persona = updated.copyWith(updatedAt: DateTime.now());
+
+    final query = db.personaBox
+        .query(PersonaEntity_.id.equals(persona.id))
+        .build();
+    final existing = query.findFirst();
+    query.close();
+
+    final entity = PersonaEntity.fromDomain(persona);
+    if (existing != null) {
+      entity.internalId = existing.internalId;
+    }
+    db.personaBox.put(entity);
+
+    final data = await _loadAll();
+    if (ref.mounted) {
+      state = AsyncData(data);
+    }
+  }
+
+  Future<void> deletePersona(String id) async {
+    if (!ref.mounted) return;
+    final db = ref.read(databaseProvider);
+    final query = db.personaBox.query(PersonaEntity_.id.equals(id)).build();
+    db.personaBox.removeMany(query.findIds());
+    query.close();
+
+    final convQuery = db.conversationBox
+        .query(ConversationEntity_.personaId.equals(id))
+        .build();
+    for (final entity in convQuery.find()) {
+      entity.personaId = null;
+      db.conversationBox.put(entity);
+    }
+    convQuery.close();
+
+    final data = await _loadWithoutSeeding();
+    if (ref.mounted) {
+      state = AsyncData(data);
+    }
+  }
+
+  /// Re-adds any built-in personas that were deleted, without touching
+  /// custom ones or duplicating built-ins that are still present.
+  Future<void> restoreBuiltInPersonas() async {
+    if (!ref.mounted) return;
+    final db = ref.read(databaseProvider);
+    final existingIds = db.personaBox.getAll().map((e) => e.id).toSet();
+    for (final preset in builtInPersonas) {
+      if (!existingIds.contains(preset.id)) {
+        db.personaBox.put(PersonaEntity.fromDomain(preset));
+      }
+    }
+    final data = await _loadWithoutSeeding();
+    if (ref.mounted) {
+      state = AsyncData(data);
+    }
+  }
+
+  Future<List<Persona>> _loadWithoutSeeding() async {
+    if (!ref.mounted) return [];
+    final db = ref.read(databaseProvider);
+    final entities = db.personaBox.getAll();
+    final personas = entities.map((e) => e.toDomain()).toList();
+    personas.sort((a, b) {
+      if (a.isBuiltIn != b.isBuiltIn) return a.isBuiltIn ? 1 : -1;
+      return a.name.compareTo(b.name);
+    });
+    return personas;
+  }
+
+  Future<Persona> clonePersona(String id) async {
+    final personas = state.value ?? [];
+    final original = personas.firstWhere(
+      (p) => p.id == id,
+      orElse: () => throw Exception('Persona not found'),
+    );
+
+    final now = DateTime.now();
+    final clone = Persona(
+      id: now.millisecondsSinceEpoch.toString(),
+      name: '${original.name} (Copy)',
+      emoji: original.emoji,
+      systemPrompt: original.systemPrompt,
+      description: original.description,
+      isBuiltIn: false,
+      createdAt: now,
+      updatedAt: now,
+      category: original.category,
+      preferredParams: original.preferredParams != null
+          ? Map<String, dynamic>.from(original.preferredParams!)
+          : null,
+    );
+    final db = ref.read(databaseProvider);
+    db.personaBox.put(PersonaEntity.fromDomain(clone));
+    state = AsyncData(await _loadAll());
+    return clone;
+  }
+
+  static final List<Persona> builtInPersonas = [
+    Persona(
+      id: 'builtin-general',
+      name: 'General Assistant',
+      emoji: '🤖',
+      systemPrompt:
+          'You are a helpful, knowledgeable AI assistant. Provide clear, accurate, and concise responses. When you\'re not sure about something, say so. Use markdown formatting for structured responses.',
+      description: 'Helpful, knowledgeable assistant',
+      isBuiltIn: true,
+      createdAt: DateTime(2026),
+      updatedAt: DateTime(2026),
+      category: 'General',
+    ),
+    Persona(
+      id: 'builtin-code',
+      name: 'Code Assistant',
+      emoji: '🧑‍💻',
+      systemPrompt:
+          'You are an expert software engineer. Help with coding questions, debugging, code reviews, and architecture decisions. Always provide code examples with proper syntax highlighting. Explain your reasoning. Follow best practices and mention potential pitfalls. When writing code, include comments for complex logic.',
+      description: 'Expert software engineer',
+      isBuiltIn: true,
+      createdAt: DateTime(2026),
+      updatedAt: DateTime(2026),
+      category: 'Coding',
+    ),
+    Persona(
+      id: 'builtin-math',
+      name: 'Math Tutor',
+      emoji: '📐',
+      systemPrompt:
+          'You are a patient and thorough math tutor. Explain concepts step by step, starting from fundamentals. Use examples to illustrate abstract concepts. When solving problems, show your work clearly. Encourage the student and offer practice problems.',
+      description: 'Patient, step-by-step math tutor',
+      isBuiltIn: true,
+      createdAt: DateTime(2026),
+      updatedAt: DateTime(2026),
+      category: 'Education',
+    ),
+    Persona(
+      id: 'builtin-story',
+      name: 'Story Writer',
+      emoji: '✍️',
+      systemPrompt:
+          'You are a creative fiction writer. Help craft engaging stories, develop characters, build worlds, and write dialogue. Match the tone and style the user requests. Offer constructive suggestions to improve narratives. Be creative and take risks with your writing while staying true to the user\'s vision.',
+      description: 'Creative fiction writer',
+      isBuiltIn: true,
+      createdAt: DateTime(2026),
+      updatedAt: DateTime(2026),
+      category: 'Creative',
+    ),
+    Persona(
+      id: 'builtin-tutor',
+      name: 'General Tutor',
+      emoji: '📚',
+      systemPrompt:
+          'You are an educational tutor skilled in all subjects. Explain complex topics in simple terms. Use analogies, examples, and visual descriptions. Break down topics into digestible pieces. Check understanding by posing questions. Adapt your explanation style to the student\'s level.',
+      description: 'Skilled tutor for all subjects',
+      isBuiltIn: true,
+      createdAt: DateTime(2026),
+      updatedAt: DateTime(2026),
+      category: 'Education',
+    ),
+    Persona(
+      id: 'builtin-editor',
+      name: 'Writing Editor',
+      emoji: '✏️',
+      systemPrompt:
+          'You are a professional writing editor. Help improve text clarity, grammar, style, and structure. Provide specific suggestions with explanations. Maintain the author\'s voice while improving readability. Offer alternatives rather than dictating changes. Format feedback clearly with before/after examples.',
+      description: 'Professional writing editor',
+      isBuiltIn: true,
+      createdAt: DateTime(2026),
+      updatedAt: DateTime(2026),
+      category: 'Creative',
+    ),
+    Persona(
+      id: 'builtin-summarizer',
+      name: 'Summarizer',
+      emoji: '📋',
+      systemPrompt:
+          'You are a concise summarizer. When given text, provide clear, accurate summaries that capture the key points. Use bullet points for multiple items. Maintain the original meaning without adding interpretation. Adjust summary length based on the input — shorter inputs get shorter summaries.',
+      description: 'Concise, accurate summarizer',
+      isBuiltIn: true,
+      createdAt: DateTime(2026),
+      updatedAt: DateTime(2026),
+      category: 'General',
+    ),
+  ];
+}
+
+final filteredPersonasProvider = Provider<List<Persona>>((ref) {
+  final personasAsync = ref.watch(personasNotifierProvider);
+  final personas = personasAsync.value ?? [];
+  final category = ref.watch(personaCategoryFilterProvider);
+  final query = ref.watch(personaSearchQueryProvider).toLowerCase();
+
+  var filtered = personas;
+  if (category != null && category.isNotEmpty) {
+    filtered = filtered.where((p) => p.category == category).toList();
+  }
+  if (query.isNotEmpty) {
+    filtered = filtered
+        .where(
+          (p) =>
+              p.name.toLowerCase().contains(query) ||
+              (p.description?.toLowerCase().contains(query) ?? false) ||
+              p.systemPrompt.toLowerCase().contains(query),
+        )
+        .toList();
+  }
+  return filtered;
+});
+
+final builtInPersonasProvider = Provider<List<Persona>>((ref) {
+  final personas = ref.watch(personasNotifierProvider).value ?? [];
+  return personas.where((p) => p.isBuiltIn).toList();
+});
+
+final userPersonasProvider = Provider<List<Persona>>((ref) {
+  final personas = ref.watch(personasNotifierProvider).value ?? [];
+  return personas.where((p) => !p.isBuiltIn).toList();
+});
+
+final personaByIdProvider = Provider.family<Persona?, String>((ref, id) {
+  try {
+    final personas = ref.watch(personasNotifierProvider).value ?? [];
+    return personas.firstWhere((p) => p.id == id);
+  } catch (_) {
+    return null;
+  }
+});
+
+final personasForConversationProvider = Provider.family<List<Persona>, String?>(
+  (ref, personaIdsRaw) {
+    final personas = ref.watch(personasNotifierProvider).value ?? [];
+    return PersonaPromptUtils.resolvePersonas(personaIdsRaw, personas);
+  },
+);

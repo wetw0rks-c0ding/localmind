@@ -1,0 +1,1033 @@
+import 'package:flutter/material.dart';
+import 'package:hugeicons/hugeicons.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import 'package:shadcn_ui/shadcn_ui.dart';
+import 'package:localmind/l10n/app_localizations.dart';
+import '../../../core/components/server_logo.dart';
+import '../../../core/constants/app_constants.dart';
+import '../data/models/server.dart';
+import '../../../core/models/enums.dart';
+import '../../../core/providers/service_providers.dart';
+import '../../../core/utils/system_insets.dart';
+import '../providers/server_providers.dart';
+import 'components/https_scheme_hint.dart';
+import 'components/server_icon_picker.dart';
+import 'components/server_type_selector.dart';
+
+class AddServerScreen extends ConsumerStatefulWidget {
+  final Server? editServer;
+
+  const AddServerScreen({super.key, this.editServer});
+
+  @override
+  ConsumerState<AddServerScreen> createState() => _AddServerScreenState();
+}
+
+class _AddServerScreenState extends ConsumerState<AddServerScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _scrollController = ScrollController();
+  late TextEditingController _nameController;
+  late TextEditingController _hostController;
+  late TextEditingController _portController;
+  late TextEditingController _apiKeyController;
+  late TextEditingController _ramGbController;
+  late TextEditingController _vramGbController;
+  late TextEditingController _imageModelIdsController;
+
+  late ServerType _selectedType;
+  String? _selectedIconName;
+  bool _isTesting = false;
+  bool _isSaving = false;
+  String? _testResult;
+
+  bool get _isEditing => widget.editServer != null;
+  bool get _requiresEndpoint =>
+      _selectedType != ServerType.openRouter &&
+      _selectedType != ServerType.requesty &&
+      _selectedType != ServerType.ollamaCloud;
+  bool get _requiresMandatoryApiKey =>
+      _selectedType == ServerType.openRouter ||
+      _selectedType == ServerType.requesty ||
+      _selectedType == ServerType.ollamaCloud;
+
+  String _lastHostScheme = '';
+
+  int _defaultPortForType(ServerType type) {
+    return switch (type) {
+      ServerType.lmStudio => AppConstants.lmStudioDefaultPort,
+      ServerType.openAICompatible => AppConstants.openAICompatibleDefaultPort,
+      ServerType.ollama => AppConstants.ollamaDefaultPort,
+      ServerType.ollamaCloud => AppConstants.ollamaCloudDefaultPort,
+      ServerType.openRouter => 443,
+      ServerType.requesty => 443,
+      ServerType.onDevice => 0,
+    };
+  }
+
+  void _onHostChanged() {
+    final text = _hostController.text.trim();
+    final parsed = parseServerAddressInput(text);
+    if (parsed == null) return;
+
+    if (parsed.hasPort) {
+      _portController.text = parsed.port.toString();
+    } else if (parsed.scheme == 'https' && _lastHostScheme != 'https') {
+      final currentPort = int.tryParse(_portController.text.trim());
+      if (currentPort == _defaultPortForType(_selectedType)) {
+        _portController.text = '443';
+      }
+    } else if (parsed.scheme == 'http' && _lastHostScheme == 'https') {
+      final currentPort = int.tryParse(_portController.text.trim());
+      if (currentPort == 443) {
+        _portController.text = _defaultPortForType(_selectedType).toString();
+      }
+    }
+    _lastHostScheme = parsed.scheme;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    final server = widget.editServer;
+    _selectedType = server?.type ?? ServerType.lmStudio;
+    _selectedIconName = server?.iconName;
+    _nameController = TextEditingController(text: server?.name ?? '');
+    final initialHost = server != null
+        ? (server.pathPrefix != null && server.pathPrefix!.isNotEmpty
+              ? '${server.host}${server.pathPrefix}'
+              : server.host)
+        : '';
+    _hostController = TextEditingController(text: initialHost);
+    _portController = TextEditingController(
+      text:
+          server?.port.toString() ??
+          AppConstants.lmStudioDefaultPort.toString(),
+    );
+    _apiKeyController = TextEditingController(text: server?.apiKey ?? '');
+    _ramGbController = TextEditingController(
+      text: server?.availableRamGb?.toString() ?? '',
+    );
+    _vramGbController = TextEditingController(
+      text: server?.availableVramGb?.toString() ?? '',
+    );
+    _lastHostScheme = isHttpsAddressInput(initialHost) ? 'https' : 'http';
+    _imageModelIdsController = TextEditingController(
+      text: server?.type != ServerType.openAICompatible
+          ? ''
+          : ref.read(manualImageModelIdsProvider(server!.id)).join('\n'),
+    );
+    _hostController.addListener(_onHostChanged);
+  }
+
+  @override
+  void dispose() {
+    _hostController.removeListener(_onHostChanged);
+    _scrollController.dispose();
+    _nameController.dispose();
+    _hostController.dispose();
+    _portController.dispose();
+    _apiKeyController.dispose();
+    _ramGbController.dispose();
+    _vramGbController.dispose();
+    _imageModelIdsController.dispose();
+    super.dispose();
+  }
+
+  void _onTypeChanged(ServerType type) {
+    setState(() {
+      _selectedType = type;
+      _testResult = null;
+
+      final isHttps = isHttpsAddressInput(_hostController.text);
+      if (type == ServerType.openRouter || type == ServerType.requesty) {
+        _portController.text = '443';
+      } else if (type == ServerType.ollamaCloud) {
+        _portController.text = AppConstants.ollamaCloudDefaultPort.toString();
+        _hostController.text = AppConstants.ollamaCloudBaseUrl;
+      } else if (isHttps) {
+        _portController.text = '443';
+      } else if (type == ServerType.lmStudio) {
+        _portController.text = AppConstants.lmStudioDefaultPort.toString();
+      } else if (type == ServerType.openAICompatible) {
+        _portController.text = AppConstants.openAICompatibleDefaultPort
+            .toString();
+      } else if (type == ServerType.ollama) {
+        _portController.text = AppConstants.ollamaDefaultPort.toString();
+      }
+    });
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollController.hasClients) {
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  Future<void> _testConnection() async {
+    if (_formKey.currentState?.validate() != true) return;
+
+    // Defensive mounted check before any state mutation. See #65.
+    if (!mounted) return;
+    setState(() {
+      _isTesting = true;
+      _testResult = null;
+    });
+    _scrollToBottom();
+
+    final apiService = ref.read(serverApiServiceProvider);
+    final testServer = _buildServer();
+
+    try {
+      final isConnected = await apiService.testConnection(testServer);
+      if (!mounted) return;
+      setState(() {
+        _testResult = isConnected
+            ? AppLocalizations.of(context)?.connection_successful ??
+                  'Connection successful'
+            : AppLocalizations.of(context)?.connection_failed ??
+                  'Connection failed';
+      });
+      if (isConnected) {
+        invalidateAvailableModelsCache(testServer.id);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _testResult =
+            AppLocalizations.of(context)?.error_with_message(e.toString()) ??
+            'Error: $e';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isTesting = false;
+        });
+        _scrollToBottom();
+      }
+    }
+  }
+
+  int? _parseOptionalGb(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return null;
+    return int.tryParse(trimmed);
+  }
+
+  Server _buildServer() {
+    final rawHost = _hostController.text.trim();
+    final rawPort = _portController.text.trim();
+    final defaultPort = _defaultPortForType(_selectedType);
+    String host;
+    int port;
+    String? pathPrefix;
+
+    if (_selectedType == ServerType.ollamaCloud) {
+      host = AppConstants.ollamaCloudBaseUrl;
+      port = AppConstants.ollamaCloudDefaultPort;
+    } else {
+      final parsed = parseServerAddressInput(rawHost);
+      if (parsed != null) {
+        final hasExplicitPort = parsed.hasPort;
+        host =
+            '${parsed.scheme}://${parsed.host}${hasExplicitPort ? ':${parsed.port}' : ''}';
+        final schemeDefaultPort = parsed.scheme == 'https' ? 443 : defaultPort;
+        port = hasExplicitPort
+            ? parsed.port
+            : (int.tryParse(rawPort) ?? schemeDefaultPort);
+        final prefix = extractPathPrefix(parsed);
+        pathPrefix = prefix.isNotEmpty ? prefix : null;
+      } else {
+        host = rawHost;
+        port = int.tryParse(rawPort) ?? defaultPort;
+        pathPrefix = null;
+      }
+    }
+
+    return Server(
+      id:
+          widget.editServer?.id ??
+          DateTime.now().millisecondsSinceEpoch.toString(),
+      name: _nameController.text.trim(),
+      type: _selectedType,
+      host: host,
+      port: port,
+      apiKey: _requiresMandatoryApiKey
+          ? _apiKeyController.text.trim()
+          : (_apiKeyController.text.trim().isNotEmpty
+                ? _apiKeyController.text.trim()
+                : null),
+      isDefault: widget.editServer?.isDefault ?? false,
+      createdAt: widget.editServer?.createdAt ?? DateTime.now(),
+      lastConnectedAt: widget.editServer?.lastConnectedAt ?? DateTime.now(),
+      status: widget.editServer?.status ?? ConnectionStatus.disconnected,
+      iconName: _selectedIconName,
+      pathPrefix: pathPrefix,
+      availableRamGb: _selectedType == ServerType.lmStudio
+          ? _parseOptionalGb(_ramGbController.text)
+          : widget.editServer?.availableRamGb,
+      availableVramGb: _selectedType == ServerType.lmStudio
+          ? _parseOptionalGb(_vramGbController.text)
+          : widget.editServer?.availableVramGb,
+    );
+  }
+
+  Future<void> _saveServer() async {
+    if (_formKey.currentState?.validate() != true) return;
+
+    // Defensive mounted check before any state mutation. See #65.
+    if (!mounted) return;
+    setState(() {
+      _isSaving = true;
+    });
+
+    var hasPopped = false;
+    try {
+      final server = _buildServer();
+
+      if (_isEditing) {
+        await ref.read(serversProvider.notifier).updateServer(server);
+      } else {
+        await ref.read(serversProvider.notifier).addServer(server);
+      }
+      // Guard every ref-touching statement post-await — the user can pop
+      // this screen after the provider mutation succeeds.
+      if (!mounted) return;
+      if (server.type == ServerType.openAICompatible) {
+        await ref
+            .read(manualImageModelIdsProvider(server.id).notifier)
+            .setIds(_imageModelIdsController.text);
+        if (!mounted) return;
+      }
+      ref.invalidate(availableModelsProvider(server.id));
+      final apiService = ref.read(serverApiServiceProvider);
+      await ref
+          .read(serversProvider.notifier)
+          .testConnection(server.id, apiService);
+      if (!mounted) return;
+      invalidateAvailableModelsCache(server.id);
+
+      if (mounted) {
+        final l10n = AppLocalizations.of(context);
+        final messenger = ScaffoldMessenger.maybeOf(context);
+        hasPopped = true;
+        if (Navigator.canPop(context)) {
+          Navigator.pop(context);
+        } else {
+          context.pop();
+        }
+        if (l10n != null && messenger != null) {
+          messenger.showSnackBar(
+            SnackBar(
+              content: Text(
+                _isEditing ? l10n.server_updated : l10n.server_added,
+              ),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      hasPopped = false;
+      if (mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          SnackBar(
+            content: Text(
+              AppLocalizations.of(context)?.error_with_message(e.toString()) ??
+                  'Error: $e',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted && !hasPopped) {
+        setState(() {
+          _isSaving = false;
+        });
+      }
+    }
+  }
+
+  String? _validateName(String? value) {
+    final context = this.context;
+    final l10n = AppLocalizations.of(context)!;
+    if (value == null || value.trim().isEmpty) {
+      return l10n.name_required;
+    }
+    if (value.trim().length > 50) {
+      return l10n.name_length_validation;
+    }
+    return null;
+  }
+
+  String? _validateHost(String? value) {
+    if (!_requiresEndpoint) return null;
+    final l10n = AppLocalizations.of(context)!;
+
+    if (value == null || value.trim().isEmpty) {
+      return l10n.host_required;
+    }
+    final parsed = parseServerAddressInput(value);
+    if (parsed == null) {
+      return l10n.host_valid;
+    }
+    return null;
+  }
+
+  String? _validatePort(String? value) {
+    if (!_requiresEndpoint) return null;
+    final l10n = AppLocalizations.of(context)!;
+
+    if (value == null || value.trim().isEmpty) {
+      return l10n.port_required;
+    }
+    final port = int.tryParse(value.trim());
+    if (port == null || port < 1 || port > 65535) {
+      return l10n.port_range;
+    }
+    return null;
+  }
+
+  String? _validateApiKey(String? value) {
+    if (_requiresMandatoryApiKey) {
+      final l10n = AppLocalizations.of(context)!;
+      if (value == null || value.trim().isEmpty) {
+        return _selectedType == ServerType.ollamaCloud
+            ? l10n.api_key_required_ollama_cloud
+            : _selectedType == ServerType.requesty
+            ? l10n.api_key_required_requesty
+            : l10n.api_key_required_openrouter;
+      }
+      if (_selectedType == ServerType.openRouter &&
+          !value.trim().startsWith('sk-')) {
+        return l10n.api_key_format;
+      }
+    }
+    return null;
+  }
+
+  void _showIconPicker() {
+    showShadSheet(
+      context: context,
+      side: ShadSheetSide.bottom,
+      builder: (context) => ServerIconPicker(
+        selectedIconName: _selectedIconName,
+        onIconSelected: (iconName) {
+          setState(() {
+            _selectedIconName = iconName;
+          });
+        },
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    final theme = Theme.of(context);
+    final systemBottomInset = bottomSystemInset(context);
+    final colorScheme = theme.colorScheme;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_isEditing ? l10n.edit_server : l10n.add_server_title),
+        leading: IconButton(
+          icon: const HugeIcon(icon: HugeIcons.strokeRoundedCancel01),
+          onPressed: () => context.pop(),
+        ),
+      ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      floatingActionButton: _buildFloatingActionBar(
+        context,
+        bottomInset: systemBottomInset,
+      ),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          controller: _scrollController,
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 120 + systemBottomInset),
+          children: [
+            _buildHeaderCard(context),
+            const SizedBox(height: 14),
+            _buildSectionCard(
+              context,
+              title: l10n.server_type_label,
+              subtitle: l10n.server_type_help,
+              child: ServerTypeSelector(
+                selectedType: _selectedType,
+                onChanged: _onTypeChanged,
+              ),
+            ),
+            const SizedBox(height: 12),
+            _buildSectionCard(
+              context,
+              title: l10n.server_identity_title,
+              subtitle: l10n.server_identity_desc,
+              child: Column(
+                children: [
+                  GestureDetector(
+                    onTap: _showIconPicker,
+                    child: Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: colorScheme.surfaceContainerHighest.withValues(
+                          alpha: 0.35,
+                        ),
+                        border: Border.all(
+                          color: colorScheme.outline.withValues(alpha: 0.4),
+                        ),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 48,
+                            height: 48,
+                            padding:
+                                _selectedIconName == null &&
+                                    _selectedType.hasLogo
+                                ? const EdgeInsets.all(6)
+                                : EdgeInsets.zero,
+                            decoration: BoxDecoration(
+                              color: colorScheme.primary.withValues(
+                                alpha: 0.12,
+                              ),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Center(
+                              child: _selectedIconName != null
+                                  ? HugeIcon(
+                                      icon:
+                                          (getHugeIconByName(
+                                            _selectedIconName,
+                                          )?.icon ??
+                                          getDefaultServerIcon(
+                                            _selectedType.name,
+                                          )!.icon),
+                                      size: 24,
+                                      color: colorScheme.primary,
+                                    )
+                                  : ServerLogo(
+                                      type: _selectedType,
+                                      size: _selectedType.hasLogo ? 32 : 24,
+                                      borderRadius: 7,
+                                      iconColor: colorScheme.primary,
+                                    ),
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  l10n.server_icon_label,
+                                  style: theme.textTheme.labelLarge?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  _selectedIconName ?? l10n.default_icon,
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          HugeIcon(
+                            icon: HugeIcons.strokeRoundedArrowRight01,
+                            size: 16,
+                            color: colorScheme.onSurfaceVariant,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextFormField(
+                    controller: _nameController,
+                    decoration: InputDecoration(
+                      labelText: l10n.name_label,
+                      hintText: l10n.my_server_hint,
+                    ),
+                    validator: _validateName,
+                    textInputAction: TextInputAction.next,
+                  ),
+                ],
+              ),
+            ),
+            if (_requiresEndpoint) ...[
+              const SizedBox(height: 12),
+              _buildSectionCard(
+                context,
+                title: l10n.server_connection_title,
+                subtitle: l10n.server_connection_desc,
+                child: Column(
+                  children: [
+                    TextFormField(
+                      controller: _hostController,
+                      decoration: InputDecoration(
+                        labelText: l10n.host_label,
+                        hintText: '192.168.1.100',
+                      ),
+                      validator: _validateHost,
+                      keyboardType: TextInputType.text,
+                      textInputAction: TextInputAction.next,
+                    ),
+                    HttpsSchemeHint(controller: _hostController),
+                    const SizedBox(height: 12),
+                    TextFormField(
+                      controller: _portController,
+                      decoration: InputDecoration(
+                        labelText: l10n.port_label,
+                        hintText: _selectedType == ServerType.lmStudio
+                            ? AppConstants.lmStudioDefaultPort.toString()
+                            : AppConstants.ollamaDefaultPort.toString(),
+                      ),
+                      validator: _validatePort,
+                      keyboardType: TextInputType.number,
+                      textInputAction: TextInputAction.next,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            if (_selectedType == ServerType.openAICompatible)
+              ExpansionTile(
+                title: Text(l10n.image_generation),
+                children: [
+                  TextFormField(
+                    controller: _imageModelIdsController,
+                    minLines: 1,
+                    maxLines: 4,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    smartDashesType: SmartDashesType.disabled,
+                    decoration: InputDecoration(
+                      labelText: l10n.image_model_ids,
+                      helperText: l10n.image_model_ids_hint,
+                      helperMaxLines: 2,
+                    ),
+                  ),
+                ],
+              ),
+            if (_selectedType == ServerType.lmStudio) ...[
+              const SizedBox(height: 12),
+              _buildSectionCard(
+                context,
+                title: l10n.lm_studio_memory_settings_title,
+                subtitle: l10n.lm_studio_memory_settings_desc,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextFormField(
+                        controller: _ramGbController,
+                        decoration: InputDecoration(
+                          labelText: l10n.lm_studio_available_ram_gb,
+                          hintText: '32',
+                        ),
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextFormField(
+                        controller: _vramGbController,
+                        decoration: InputDecoration(
+                          labelText: l10n.lm_studio_available_vram_gb,
+                          hintText: '6',
+                        ),
+                        keyboardType: TextInputType.number,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            _buildSectionCard(
+              context,
+              title: l10n.server_authentication_title,
+              subtitle: _requiresMandatoryApiKey
+                  ? (_selectedType == ServerType.requesty
+                        ? l10n.server_authentication_required_desc_requesty
+                        : l10n.server_authentication_required_desc)
+                  : l10n.server_authentication_optional_desc,
+              child: Column(
+                children: [
+                  TextFormField(
+                    controller: _apiKeyController,
+                    decoration: InputDecoration(
+                      labelText: _requiresMandatoryApiKey
+                          ? l10n.api_key_required
+                          : l10n.api_key_optional,
+                      hintText: _requiresMandatoryApiKey
+                          ? (_selectedType == ServerType.ollamaCloud
+                                ? l10n.api_key_hint_ollama_cloud
+                                : _selectedType == ServerType.requesty
+                                ? l10n.api_key_hint_requesty
+                                : l10n.api_key_hint_openrouter)
+                          : l10n.api_key_hint_generic,
+                    ),
+                    validator: _validateApiKey,
+                    obscureText: true,
+                    textInputAction: TextInputAction.done,
+                  ),
+                  if (_requiresMandatoryApiKey) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.primary.withValues(
+                          alpha: 0.08,
+                        ),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: theme.colorScheme.primary.withValues(
+                            alpha: 0.2,
+                          ),
+                        ),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          HugeIcon(
+                            icon: HugeIcons.strokeRoundedShield01,
+                            size: 18,
+                            color: theme.colorScheme.primary,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              _selectedType == ServerType.ollamaCloud
+                                  ? l10n.ollama_cloud_disclosure
+                                  : _selectedType == ServerType.requesty
+                                  ? l10n.requesty_disclosure
+                                  : l10n.openrouter_disclosure,
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurface.withValues(
+                                  alpha: 0.8,
+                                ),
+                                height: 1.4,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (_testResult != null) ...[
+              const SizedBox(height: 12),
+              _buildTestResultBanner(context),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeaderCard(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.38),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: colorScheme.outline.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            padding: _selectedType.hasLogo
+                ? const EdgeInsets.all(7)
+                : EdgeInsets.zero,
+            decoration: BoxDecoration(
+              color: colorScheme.primary.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Center(
+              child: ServerLogo(
+                type: _selectedType,
+                size: _selectedType.hasLogo ? 34 : 28,
+                borderRadius: 8,
+                iconColor: colorScheme.primary,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _isEditing ? l10n.edit_server : l10n.add_server_title,
+            style: theme.textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            _addServerHeaderSubtitle(l10n),
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+              height: 1.4,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _buildInfoPill(
+                context,
+                icon: HugeIcons.strokeRoundedShare01,
+                label: _serverTypeLabel(context),
+              ),
+              _buildInfoPill(
+                context,
+                icon: _requiresMandatoryApiKey
+                    ? HugeIcons.strokeRoundedKey01
+                    : HugeIcons.strokeRoundedDatabase,
+                label: _requiresMandatoryApiKey
+                    ? l10n.api_key_required
+                    : l10n.host_label,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSectionCard(
+    BuildContext context, {
+    required String title,
+    required String subtitle,
+    required Widget child,
+  }) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: colorScheme.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: colorScheme.outline.withValues(alpha: 0.16)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            subtitle,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: colorScheme.onSurfaceVariant,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 12),
+          child,
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTestResultBanner(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    final theme = Theme.of(context);
+    final success = _testResult!.contains(
+      l10n.connection_successful.split('!')[0],
+    );
+    final accent = success ? Colors.green : theme.colorScheme.error;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: accent.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: accent.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          HugeIcon(
+            icon: success
+                ? HugeIcons.strokeRoundedCheckmarkCircle01
+                : HugeIcons.strokeRoundedAlertCircle,
+            color: accent,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              _testResult!,
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: accent,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFloatingActionBar(
+    BuildContext context, {
+    required double bottomInset,
+  }) {
+    final l10n = AppLocalizations.of(context)!;
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, 0, 16, bottomInset > 0 ? 4 : 8),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: colorScheme.surface.withValues(alpha: 0.96),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(
+            color: colorScheme.outline.withValues(alpha: 0.14),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.08),
+              blurRadius: 24,
+              offset: const Offset(0, 12),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: _isTesting ? null : _testConnection,
+                  style: OutlinedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(52),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                  icon: _isTesting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const HugeIcon(icon: HugeIcons.strokeRoundedWifi01),
+                  label: Text(_isTesting ? l10n.testing : l10n.test_connection),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: _isSaving ? null : _saveServer,
+                  style: ElevatedButton.styleFrom(
+                    minimumSize: const Size.fromHeight(52),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                  ),
+                  icon: _isSaving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const HugeIcon(icon: HugeIcons.strokeRoundedFloppyDisk),
+                  label: Text(
+                    _isSaving
+                        ? l10n.save
+                        : (_isEditing ? l10n.update_server : l10n.save_server),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildInfoPill(
+    BuildContext context, {
+    required List<List<dynamic>> icon,
+    required String label,
+  }) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: colorScheme.surface.withValues(alpha: 0.7),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: colorScheme.outline.withValues(alpha: 0.18)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          HugeIcon(icon: icon, size: 16, color: colorScheme.primary),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: theme.textTheme.labelLarge?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _serverTypeLabel(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    return switch (_selectedType) {
+      ServerType.lmStudio => l10n.server_type_lm_studio,
+      ServerType.openAICompatible => l10n.server_type_openai_display,
+      ServerType.ollama => l10n.server_type_ollama,
+      ServerType.ollamaCloud => l10n.server_type_ollama_cloud,
+      ServerType.openRouter => l10n.server_type_openrouter,
+      ServerType.requesty => l10n.server_type_requesty,
+      ServerType.onDevice => l10n.server_type_on_device_display,
+    };
+  }
+
+  String _addServerHeaderSubtitle(AppLocalizations l10n) {
+    switch (_selectedType) {
+      case ServerType.lmStudio:
+      case ServerType.openAICompatible:
+      case ServerType.ollama:
+      case ServerType.onDevice:
+        return l10n.add_server_endpoint_subtitle;
+      case ServerType.ollamaCloud:
+        return l10n.add_server_ollama_cloud_subtitle;
+      case ServerType.openRouter:
+        return l10n.add_server_openrouter_subtitle;
+      case ServerType.requesty:
+        return l10n.add_server_requesty_subtitle;
+    }
+  }
+}

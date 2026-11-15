@@ -1,0 +1,500 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:llamadart/llamadart.dart' as llama;
+
+import '../../../core/inference/local_inference.dart';
+import '../../../core/logger/app_logger.dart';
+import '../../../core/utils/async_operation_queue.dart';
+import '../../../core/models/enums.dart';
+import '../../chat/data/chat_api_error.dart';
+import '../../chat/data/chat_service.dart';
+import '../../chat/data/models/chat_parameters.dart';
+import '../../chat/data/models/mcp_integration.dart';
+import '../../chat/data/models/message.dart' hide ToolCallData;
+import '../../chat/data/tools/tool_definition.dart';
+import '../../chat/utils/attachment_helpers.dart';
+import '../../servers/data/models/server.dart';
+import 'models/on_device_model.dart';
+
+class OnDeviceLlamaService {
+  OnDeviceLlamaService({
+    this.reasoningPreference,
+    this.engineFactory,
+    this.coordinator,
+  });
+
+  final InferenceCoordinator? coordinator;
+
+  final llama.LlamaEngine Function()? engineFactory;
+
+  /// Read at generation time so edits also apply to a model already in memory.
+  final bool? Function(String modelId)? reasoningPreference;
+
+  llama.LlamaEngine? _engine;
+  llama.ChatSession? _session;
+  String? _currentModelId;
+  String? _currentProjectorPath;
+  int? _currentContextLength;
+  bool? _currentUseGpu;
+  final _lifecycle = AsyncOperationQueue();
+  String? _currentSystemPrompt;
+  bool _isDisposed = false;
+  Object? _retirementError;
+
+  /// Tracks the most recent user message we processed, so we can detect
+  /// out-of-band edits or regenerations and rebuild the chat history.
+  String? _lastUserMessageId;
+  int _userMessageCount = 0;
+  Future<void>? _activeGenerationFuture;
+
+  String? get currentModelId => _currentModelId;
+  bool get isLoaded => _engine != null && !_isDisposed;
+
+  Future<bool> get supportsVision async {
+    final engine = _engine;
+    if (engine == null) return false;
+    try {
+      return await engine.supportsVision;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> loadModel(
+    OnDeviceModel model, {
+    int contextLength = 4096,
+    bool useGpu = false,
+  }) => _lifecycle.run(
+    () => _loadModel(model, contextLength: contextLength, useGpu: useGpu),
+  );
+
+  Future<void> _loadModel(
+    OnDeviceModel model, {
+    int contextLength = 4096,
+    bool useGpu = false,
+  }) async {
+    if (_isDisposed) {
+      throw StateError('OnDeviceLlamaService has been disposed');
+    }
+    if (_retirementError != null) {
+      throw StateError(
+        'Previous GGUF engine could not shut down: $_retirementError',
+      );
+    }
+    if (model.localPath == null || model.localPath!.isEmpty) {
+      throw StateError('Imported GGUF model is missing a local file path');
+    }
+
+    final gpuLayers = useGpu ? llama.ModelParams.maxGpuLayers : 0;
+    final alreadyLoaded = _engine != null && _currentModelId == model.id;
+    final contextChanged = _currentContextLength != contextLength;
+    final projectorChanged = _currentProjectorPath != model.projectorPath;
+
+    if (alreadyLoaded &&
+        !contextChanged &&
+        !projectorChanged &&
+        _currentUseGpu == useGpu) {
+      return;
+    }
+
+    await _unloadModel();
+
+    Log.info(
+      'Loading GGUF model ${model.id} from ${model.localPath} '
+      '(context=$contextLength, gpuLayers=$gpuLayers)',
+    );
+    final engine =
+        engineFactory?.call() ?? llama.LlamaEngine(llama.LlamaBackend());
+    try {
+      await engine.loadModel(
+        model.localPath!,
+        modelParams: llama.ModelParams(
+          contextSize: contextLength,
+          gpuLayers: gpuLayers,
+        ),
+      );
+
+      if (model.projectorPath != null && model.projectorPath!.isNotEmpty) {
+        final projFile = File(model.projectorPath!);
+        if (!await projFile.exists()) {
+          throw FileSystemException(
+            'Configured multimodal projector file was not found',
+            model.projectorPath,
+          );
+        }
+        Log.info('Loading multimodal projector from ${model.projectorPath}');
+        try {
+          await engine.loadMultimodalProjector(model.projectorPath!);
+          final hasVision = await engine.supportsVision;
+          if (!hasVision) {
+            throw StateError(
+              'The selected projector did not enable vision support.',
+            );
+          }
+          Log.info('Multimodal projector loaded (supportsVision=$hasVision)');
+        } catch (e) {
+          Log.error('Failed to load multimodal projector: $e');
+          throw StateError('Failed to load multimodal projector: $e');
+        }
+      }
+    } catch (_) {
+      try {
+        await engine.dispose();
+      } catch (error) {
+        _retirementError = error;
+      }
+      rethrow;
+    }
+
+    _engine = engine;
+    _currentModelId = model.id;
+    _currentUseGpu = useGpu;
+    _currentProjectorPath = model.projectorPath;
+    _currentContextLength = contextLength;
+    _session = null;
+    _currentSystemPrompt = null;
+    _lastUserMessageId = null;
+    _userMessageCount = 0;
+    Log.info('GGUF model ${model.id} loaded successfully');
+  }
+
+  /// Resets the chat session so the next [sendMessage] starts from an empty
+  /// history. Useful when the caller knows the upstream message list has been
+  /// edited or regenerated outside of this service.
+  void resetSession() {
+    _session = null;
+    _currentSystemPrompt = null;
+    _lastUserMessageId = null;
+    _userMessageCount = 0;
+  }
+
+  Stream<ChatResponse> sendMessage({
+    required String modelId,
+    required List<Message> messages,
+    required ChatParameters params,
+  }) async* {
+    final lease = coordinator?.tryAcquire();
+    if (coordinator != null && lease == null) {
+      yield const ChatResponse(
+        type: ChatResponseType.error,
+        content: 'The on-device model is busy.',
+      );
+      yield const ChatResponse(type: ChatResponseType.done);
+      return;
+    }
+    final prev = _activeGenerationFuture;
+    final generationCompleter = Completer<void>();
+    _activeGenerationFuture = generationCompleter.future;
+
+    if (prev != null) {
+      try {
+        await prev;
+      } catch (_) {}
+    }
+
+    try {
+      if (_isDisposed) {
+        yield const ChatResponse(
+          type: ChatResponseType.error,
+          content: 'GGUF engine disposed',
+        );
+        yield const ChatResponse(type: ChatResponseType.done);
+        return;
+      }
+
+      final engine = _engine;
+      if (engine == null || _currentModelId != modelId) {
+        yield const ChatResponse(
+          type: ChatResponseType.error,
+          content: 'GGUF model not loaded',
+        );
+        yield const ChatResponse(type: ChatResponseType.done);
+        return;
+      }
+
+      final userMessages = messages
+          .where((m) => m.role == MessageRole.user)
+          .toList(growable: false);
+      if (userMessages.isEmpty) {
+        yield const ChatResponse(
+          type: ChatResponseType.error,
+          content: 'GGUF chat requires a user message.',
+        );
+        yield const ChatResponse(type: ChatResponseType.done);
+        return;
+      }
+
+      final latestUserMessage = userMessages.last;
+      final systemPrompt = params.systemPrompt?.isNotEmpty == true
+          ? params.systemPrompt
+          : null;
+      final sessionContextChanged =
+          _session != null && _currentContextLength != params.contextLength;
+
+      if (_session == null ||
+          _currentSystemPrompt != systemPrompt ||
+          sessionContextChanged) {
+        _session = llama.ChatSession(
+          engine,
+          maxContextTokens: params.contextLength,
+          systemPrompt: systemPrompt,
+        );
+        _currentSystemPrompt = systemPrompt;
+        _currentContextLength = params.contextLength;
+        _userMessageCount = 0;
+        _lastUserMessageId = null;
+      } else if (userMessages.length < _userMessageCount ||
+          (_lastUserMessageId != null &&
+              latestUserMessage.id != _lastUserMessageId)) {
+        // Upstream history diverged from our internal tracking (edit, retry,
+        // regeneration). Discard the cached history and rebuild it from the
+        // caller-supplied messages on the next create() call.
+        _session!.reset(keepSystemPrompt: true);
+        _userMessageCount = 0;
+        _lastUserMessageId = null;
+      }
+
+      var text = latestUserMessage.content;
+      final paths = latestUserMessage.attachmentPaths;
+      final imagePaths = <String>[];
+      if (paths != null && paths.isNotEmpty) {
+        for (final path in paths) {
+          if (AttachmentHelpers.isDocumentPath(path)) {
+            final docText = await AttachmentHelpers.readDocumentFile(path);
+            if (docText != null && docText.trim().isNotEmpty) {
+              text = AttachmentHelpers.appendTextAttachment(
+                text,
+                AttachmentHelpers.fileNameOf(path),
+                docText,
+              );
+            }
+          } else if (AttachmentHelpers.isImagePath(path)) {
+            imagePaths.add(path);
+          }
+        }
+      }
+
+      if (imagePaths.isNotEmpty) {
+        final supportsVision = await engine.supportsVision;
+        if (!supportsVision) {
+          yield ChatResponse(
+            type: ChatResponseType.error,
+            content: ChatApiError(
+              message:
+                  'The active model does not support image attachments. '
+                  'Please attach a vision projector (mmproj) to this model or select a vision-supported model.',
+              code: ChatApiError.onDeviceVisionNotSupportedCode,
+            ).encode(),
+          );
+          yield const ChatResponse(type: ChatResponseType.done);
+          return;
+        }
+      }
+
+      text = text.trim();
+      if (text.isEmpty && imagePaths.isEmpty) {
+        yield const ChatResponse(
+          type: ChatResponseType.error,
+          content: 'GGUF chat requires a text prompt or image attachment.',
+        );
+        yield const ChatResponse(type: ChatResponseType.done);
+        return;
+      }
+
+      final contentParts = <llama.LlamaContentPart>[];
+      if (text.isNotEmpty) {
+        contentParts.add(llama.LlamaTextContent(text));
+      } else {
+        contentParts.add(const llama.LlamaTextContent('Describe this image.'));
+      }
+      for (final imagePath in imagePaths) {
+        contentParts.add(llama.LlamaImageContent(path: imagePath));
+      }
+
+      try {
+        await for (final chunk in _session!.create(
+          contentParts,
+          enableThinking:
+              reasoningPreference?.call(modelId) ??
+              params.reasoningEnabled ??
+              true,
+          params: llama.GenerationParams(
+            maxTokens: params.maxTokens,
+            temp: params.temperature,
+            topP: params.topP,
+            topK: params.topK ?? 40,
+            minP: params.minP ?? 0.0,
+            penalty: params.repeatPenalty ?? 1.1,
+          ),
+        )) {
+          if (chunk.choices.isEmpty) continue;
+          final delta = chunk.choices.first.delta;
+          final reasoning = delta.thinking;
+          if (reasoning != null && reasoning.isNotEmpty) {
+            yield ChatResponse(
+              type: ChatResponseType.reasoning,
+              reasoningContent: reasoning,
+            );
+          }
+          final content = delta.content;
+          if (content != null && content.isNotEmpty) {
+            yield ChatResponse(
+              type: ChatResponseType.message,
+              content: content,
+            );
+          }
+        }
+        _userMessageCount = userMessages.length;
+        _lastUserMessageId = latestUserMessage.id;
+        yield const ChatResponse(type: ChatResponseType.done);
+      } catch (e) {
+        Log.error('GGUF inference error: $e');
+        yield ChatResponse(
+          type: ChatResponseType.error,
+          content: 'GGUF inference error: ${e.toString()}',
+        );
+        yield const ChatResponse(type: ChatResponseType.done);
+      }
+    } finally {
+      lease?.release();
+      if (!generationCompleter.isCompleted) {
+        generationCompleter.complete();
+      }
+      if (identical(_activeGenerationFuture, generationCompleter.future)) {
+        _activeGenerationFuture = null;
+      }
+    }
+  }
+
+  /// Uses the model without touching the retained in-app ChatSession.
+  /// The caller holds the shared inference lease.
+  Stream<InferenceEvent> generateExternal(
+    InferenceRequest request,
+    InferenceCancellation cancellation, {
+    required double defaultTemperature,
+    required double defaultTopP,
+    required int defaultMaxTokens,
+  }) async* {
+    final engine = _engine;
+    if (engine == null || !isLoaded || currentModelId != request.model) {
+      throw StateError('GGUF model is unavailable.');
+    }
+    final messages = [
+      for (final message in request.messages)
+        llama.LlamaChatMessage.fromText(
+          role: llama.LlamaChatRole.values.byName(message.role.name),
+          text: message.text,
+        ),
+    ];
+    final iterator = StreamIterator(
+      engine.create(
+        messages,
+        enableThinking: false,
+        params: llama.GenerationParams(
+          temp: request.temperature ?? defaultTemperature,
+          topP: request.topP ?? defaultTopP,
+          maxTokens: request.maxTokens ?? defaultMaxTokens,
+        ),
+      ),
+    );
+    try {
+      while (await cancellation.moveNext(iterator)) {
+        for (final choice in iterator.current.choices) {
+          final text = choice.delta.content;
+          if (text != null && text.isNotEmpty) yield InferenceText(text);
+          if (choice.finishReason != null) {
+            yield InferenceFinished(length: choice.finishReason == 'length');
+          }
+        }
+      }
+    } finally {
+      if (cancellation.isCancelled) engine.cancelGeneration();
+      await iterator.cancel();
+    }
+  }
+
+  /// Cancels the currently running inference, if any. Safe to call when no
+  /// generation is in progress.
+  void cancelGeneration() {
+    final engine = _engine;
+    if (engine == null) return;
+    try {
+      engine.backend.cancelGeneration();
+    } catch (e) {
+      Log.error('Failed to cancel GGUF generation: $e');
+    }
+  }
+
+  Future<void> unloadModel() => _lifecycle.run(_unloadModel);
+
+  Future<void> _unloadModel() async {
+    cancelGeneration();
+    final engine = _engine;
+    _engine = null;
+    _session = null;
+    _currentModelId = null;
+    _currentUseGpu = null;
+    _currentProjectorPath = null;
+    _currentContextLength = null;
+    _currentSystemPrompt = null;
+    _lastUserMessageId = null;
+    _userMessageCount = 0;
+    if (engine != null) {
+      try {
+        await engine.dispose();
+      } catch (e) {
+        _retirementError = e;
+        Log.error('Error disposing GGUF engine: $e');
+        rethrow;
+      }
+    }
+  }
+
+  void dispose() {
+    _isDisposed = true;
+    unawaited(
+      unloadModel().catchError((Object error) {
+        Log.warning('GGUF disposal did not complete: $error');
+      }),
+    );
+  }
+}
+
+class OnDeviceLlamaChatService implements ChatService {
+  OnDeviceLlamaChatService(this._llamaService);
+
+  final OnDeviceLlamaService _llamaService;
+  bool _isCancelled = false;
+
+  @override
+  Stream<ChatResponse> sendMessage({
+    required Server server,
+    required String modelId,
+    required List<Message> messages,
+    required ChatParameters params,
+    List<McpIntegration>? integrations,
+    List<ToolDefinition>? tools,
+    bool continueGeneration = false,
+  }) async* {
+    _isCancelled = false;
+    await for (final response in _llamaService.sendMessage(
+      modelId: modelId,
+      messages: messages,
+      params: params,
+    )) {
+      if (_isCancelled) break;
+      yield response;
+      if (response.type == ChatResponseType.done ||
+          response.type == ChatResponseType.error) {
+        break;
+      }
+    }
+  }
+
+  @override
+  void cancelStream() {
+    _isCancelled = true;
+    _llamaService.cancelGeneration();
+  }
+}

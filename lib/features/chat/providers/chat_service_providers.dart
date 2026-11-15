@@ -1,0 +1,137 @@
+import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:localmind/core/models/enums.dart';
+import 'package:localmind/core/providers/app_providers.dart';
+import 'package:localmind/core/providers/service_providers.dart';
+import 'package:localmind/features/chat/utils/image_upload_utils.dart';
+import 'package:localmind/features/servers/data/models/server.dart';
+import 'package:localmind/features/servers/providers/server_providers.dart';
+import 'package:localmind/features/on_device/providers/on_device_providers.dart';
+import 'package:localmind/features/on_device/data/on_device_chat_service.dart';
+import 'package:localmind/features/on_device/data/on_device_gemma_service.dart';
+import 'package:localmind/features/on_device/data/on_device_llama_service.dart';
+import 'package:localmind/features/on_device/data/models/on_device_model.dart';
+import 'package:localmind/features/on_device/data/on_device_mlx_service.dart';
+import '../data/chat_service.dart';
+import '../data/image_generation_service.dart';
+import '../data/smart_reply_service.dart';
+import '../data/title_generation_service.dart';
+
+final imageGenerationServiceProvider = Provider<ImageGenerationService>((ref) {
+  final dio = Dio(BaseOptions(connectTimeout: const Duration(seconds: 15)));
+  ref.onDispose(() => dio.close(force: true));
+  return ImageGenerationService(dio);
+});
+
+final chatServiceProvider = Provider<ChatService?>((ref) {
+  final server = ref.watch(activeServerProvider);
+  if (server == null) {
+    return null;
+  }
+  final loadedRuntime = ref.watch(
+    onDeviceEngineProvider.select((s) => s.loadedRuntime),
+  );
+  final settings = ref.watch(
+    settingsProvider.select(
+      (s) => (s.imageCompressionEnabled, s.imageCompressionLevel),
+    ),
+  );
+  final service = createChatServiceForServer(
+    server: server,
+    dio: ref.read(dioProvider),
+    onDeviceGemmaService: ref.read(onDeviceGemmaServiceProvider),
+    onDeviceLlamaService: ref.read(onDeviceLlamaServiceProvider),
+    onDeviceMlxService: ref.read(onDeviceMlxServiceProvider),
+    loadedOnDeviceRuntime: loadedRuntime,
+    imageCompressionEnabled: settings.$1,
+    imageCompressionLevel: settings.$2,
+  );
+
+  ref.onDispose(() {
+    final s = service;
+    if (s is OnDeviceChatService) {
+      s.dispose();
+    }
+  });
+
+  return service;
+});
+
+/// Builds the service that owns one reply. Remote services keep a single
+/// cancel token, so every concurrent reply gets its own instance; on-device
+/// replies share the one engine-backed [chatServiceProvider] service.
+final chatServiceFactoryProvider = Provider<ChatService? Function(Server)>((
+  ref,
+) {
+  return (server) {
+    if (server.isOnDevice) return ref.read(chatServiceProvider);
+    final settings = ref.read(settingsProvider);
+    return createChatServiceForServer(
+      server: server,
+      dio: ref.read(dioProvider),
+      onDeviceGemmaService: ref.read(onDeviceGemmaServiceProvider),
+      onDeviceLlamaService: ref.read(onDeviceLlamaServiceProvider),
+      onDeviceMlxService: ref.read(onDeviceMlxServiceProvider),
+      imageCompressionEnabled: settings.imageCompressionEnabled,
+      imageCompressionLevel: settings.imageCompressionLevel,
+    );
+  };
+});
+
+/// Whether the active model can call tools. The llama.cpp and MLX on-device
+/// runtimes don't support tool calling yet, so MCP tools never reach them.
+final activeModelSupportsToolsProvider = Provider<bool>((ref) {
+  final server = ref.watch(activeServerProvider);
+  if (server == null || !server.isOnDevice) return true;
+  final runtime = ref.watch(
+    onDeviceEngineProvider.select((s) => s.loadedRuntime),
+  );
+  return runtime != OnDeviceModelRuntime.llamaCpp &&
+      runtime != OnDeviceModelRuntime.mlx;
+});
+
+ChatService createChatServiceForServer({
+  required Server server,
+  required Dio dio,
+  required OnDeviceGemmaService onDeviceGemmaService,
+  required OnDeviceLlamaService onDeviceLlamaService,
+  OnDeviceMlxService? onDeviceMlxService,
+  OnDeviceModelRuntime? loadedOnDeviceRuntime,
+  bool imageCompressionEnabled = true,
+  ImageCompressionLevel imageCompressionLevel = ImageCompressionLevel.medium,
+}) {
+  if (server.isOnDevice) {
+    if (loadedOnDeviceRuntime == OnDeviceModelRuntime.llamaCpp) {
+      return OnDeviceLlamaChatService(onDeviceLlamaService);
+    }
+    if (loadedOnDeviceRuntime == OnDeviceModelRuntime.mlx &&
+        onDeviceMlxService != null) {
+      return OnDeviceMlxChatService(onDeviceMlxService);
+    }
+
+    return ChatService.forServer(
+      ServerType.onDevice,
+      dio,
+      onDeviceGemma: onDeviceGemmaService,
+      imageCompressionEnabled: imageCompressionEnabled,
+      imageCompressionLevel: imageCompressionLevel,
+    );
+  }
+
+  return ChatService.forServer(
+    server.type,
+    dio,
+    imageCompressionEnabled: imageCompressionEnabled,
+    imageCompressionLevel: imageCompressionLevel,
+  );
+}
+
+final smartReplyServiceProvider = Provider<SmartReplyService>((ref) {
+  final service = SmartReplyService();
+  ref.onDispose(() => service.dispose());
+  return service;
+});
+
+final titleGenerationServiceProvider = Provider<TitleGenerationService>((ref) {
+  return TitleGenerationService();
+});
