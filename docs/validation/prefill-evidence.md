@@ -56,3 +56,14 @@ instead of advancing, because nothing rebuilds the widget while prefill runs —
 the value is computed once from `live.startedAt` and only changes when chat
 state changes. A periodic tick during `processingPrompt` is needed for it to
 animate like LM Studio's.
+
+## Percentage advances and caps at 99% (follow-up fix)
+
+- `prefill-percentage.png` — `Processing prompt… 26%` shortly after send.
+- `prefill-percentage-advancing.png` — same run at ≈2 s: `67%`, proving the 200 ms
+  repaint ticker now advances the value instead of freezing it.
+- `prefill-percentage-capped.png` — later in the same run: `99%`, never `100%`
+  while prefill is still running (the estimate clamps before `easeOut`).
+
+Caption note: the "Another chat is still replying" banner in these frames is an
+unrelated concurrent generation, not the indicator.
