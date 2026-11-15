@@ -165,7 +165,9 @@ class _ProcessingIndicator extends StatelessWidget {
       final t = (elapsed / live.estimatedPrefillMs).clamp(0.0, 0.97);
       progress = Curves.easeOut.transform(t);
     }
-    final pct = (progress * 100).round();
+    // The estimate never claims completion: prefill is still running until the
+    // first token arrives, and rounding 0.999 would print "100%" too early.
+    final pct = (progress * 100).round().clamp(0, 99);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [

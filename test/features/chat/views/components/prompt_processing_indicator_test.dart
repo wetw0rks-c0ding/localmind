@@ -136,6 +136,26 @@ void main() {
       // started from build() rather than initState alone.
       expect(before, contains('Processing prompt'));
     });
+
+    testWidgets('never reports 100% while prefill is still running', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          chatState: ChatState(
+            liveGeneration: LiveGeneration(
+              phase: LiveGenerationPhase.processingPrompt,
+              startedAt: DateTime.now().subtract(const Duration(seconds: 30)),
+              estimatedPrefillMs: 1000,
+            ),
+          ),
+        ),
+      );
+
+      expect(find.textContaining('Processing prompt'), findsOneWidget);
+      expect(find.textContaining('100%'), findsNothing);
+      expect(find.textContaining('99%'), findsOneWidget);
+    });
   });
 
   group('PromptProcessingStatusBar generating', () {
