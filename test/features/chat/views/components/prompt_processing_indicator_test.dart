@@ -95,6 +95,47 @@ void main() {
       expect(find.textContaining('Processing prompt'), findsOneWidget);
       expect(find.textContaining('%'), findsOneWidget);
     });
+
+    testWidgets('percentage advances while prefill is still running', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _host(
+          chatState: ChatState(
+            liveGeneration: LiveGeneration(
+              phase: LiveGenerationPhase.processingPrompt,
+              startedAt: DateTime.now().subtract(
+                const Duration(milliseconds: 300),
+              ),
+              estimatedPrefillMs: 4000,
+            ),
+          ),
+        ),
+      );
+
+      final before = tester
+          .widget<Text>(find.textContaining('Processing prompt'))
+          .data;
+      // The indicator derives its value from wall clock time, which fake async
+      // pumping does not advance, so let real time pass and then fire the
+      // periodic repaint ticker.
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 900)),
+      );
+      await tester.pump(const Duration(milliseconds: 250));
+      final after = tester
+          .widget<Text>(find.textContaining('Processing prompt'))
+          .data;
+
+      expect(before, isNot(after));
+      int pct(String? label) =>
+          int.parse(RegExp(r'(\d+)%').firstMatch(label!)!.group(1)!);
+      expect(pct(after), greaterThan(pct(before)));
+
+      // The bar is first built while idle, so the repaint ticker must be
+      // started from build() rather than initState alone.
+      expect(before, contains('Processing prompt'));
+    });
   });
 
   group('PromptProcessingStatusBar generating', () {

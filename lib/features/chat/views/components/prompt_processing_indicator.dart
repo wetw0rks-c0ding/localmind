@@ -35,13 +35,19 @@ class _PromptProcessingStatusBarState
     _syncTimer();
   }
 
-  void _syncTimer() {
-    final live = ref.read(chatProvider).liveGeneration;
-    if (live != null && _timer == null) {
+  /// Starts the 200 ms repaint ticker whenever a live generation exists.
+  ///
+  /// This is driven from `build` as well as the lifecycle hooks: the bar is
+  /// first built while `liveGeneration` is still null (idle composer), so
+  /// initState alone never starts the ticker once a generation begins and the
+  /// elapsed-time driven states would freeze on their first computed value.
+  void _syncTimer([LiveGeneration? live]) {
+    final active = live ?? ref.read(chatProvider).liveGeneration;
+    if (active != null && _timer == null) {
       _timer = Timer.periodic(const Duration(milliseconds: 200), (_) {
         if (mounted) setState(() {});
       });
-    } else if (live == null && _timer != null) {
+    } else if (active == null && _timer != null) {
       _timer?.cancel();
       _timer = null;
     }
@@ -61,6 +67,7 @@ class _PromptProcessingStatusBarState
     if (!enabled) return const SizedBox.shrink();
 
     final live = ref.watch(chatProvider.select((s) => s.liveGeneration));
+    _syncTimer(live);
     final activeConv = ref.watch(conv.activeConversationProvider);
     final count = activeConv?.promptsProcessed ?? 0;
 
