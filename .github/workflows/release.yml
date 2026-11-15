@@ -39,3 +39,5 @@ jobs:
       tag: ${{ github.ref_name }}
       prerelease: false
     secrets: inherit
+
+# touched to register workflow

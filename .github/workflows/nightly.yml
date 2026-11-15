@@ -23,3 +23,5 @@ jobs:
       prerelease: true
       retention: 7
     secrets: inherit
+
+# touched to register workflow
