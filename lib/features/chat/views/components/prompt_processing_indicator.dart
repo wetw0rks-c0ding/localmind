@@ -151,7 +151,6 @@ class _ProcessingIndicator extends StatelessWidget {
     final isDark = theme.brightness == Brightness.dark;
     final now = DateTime.now();
     final elapsed = now.difference(live.startedAt).inMilliseconds;
-    if (elapsed < 400) return const SizedBox.shrink();
     double progress;
     if (live.realPrefillProgress != null) {
       progress = live.realPrefillProgress!.clamp(0.0, 1.0);
@@ -201,6 +200,35 @@ class _GeneratingIndicator extends ConsumerWidget {
     final outputChars = ref.watch(
       chatProvider.select((s) => s.streamingMessage?.content.length ?? 0),
     );
+    final reasoningChars = ref.watch(
+      chatProvider.select(
+        (s) => s.streamingMessage?.reasoningContent?.length ?? 0,
+      ),
+    );
+
+    if (outputChars == 0 && reasoningChars > 0) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 12,
+            height: 12,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              valueColor: AlwaysStoppedAnimation<Color>(
+                Theme.of(context).colorScheme.primary,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            '${l10n.thinking}… ${(elapsed / 1000).toStringAsFixed(1)}s',
+            style: TextStyle(fontSize: 11, color: muted),
+          ),
+        ],
+      );
+    }
+
     final tokens = (outputChars / 4).round();
     final tps = elapsed > 0 ? tokens / (elapsed / 1000) : 0.0;
     return Row(
