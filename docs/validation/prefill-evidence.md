@@ -67,3 +67,16 @@ animate like LM Studio's.
 
 Caption note: the "Another chat is still replying" banner in these frames is an
 unrelated concurrent generation, not the indicator.
+
+## PR-branch build proof (237c723, upstream-based)
+
+Built from `/home/missioncontrol/localmind-pr` at `237c723`, installed
+04:38:16 (`lastUpdateTime` verified against the 04:12:56 APK), Qwen 3 0.6B
+on-device, Pixel 6 `1B181FDF60043F`, 523-char prompt.
+
+- `prefill-pr-advancing.png` — `Processing prompt… 29%`, arc partially filled.
+- `prefill-pr-capped.png` — `Processing prompt… 99%`, arc nearly full, never
+  `100%` while prefill runs.
+
+Same run showed `29% → 74% → 99%` across consecutive frames: the ticker
+advances the estimate and both label and arc clamp at 99% until first token.
