@@ -26,3 +26,17 @@
 **Existing related evidence (not re-captured):** `docs/validation/prompt-proc-8.png` shows generating-stats state `0 tok · 0.0 tok/s · 28.5s`.
 
 **Animations restored:** `window_animation_scale`, `transition_animation_scale`, `animator_duration_scale` set to `1`; `stay_on_while_plugged_in` set to `0`.
+
+## Video frame analysis (`prefill-recording.mp4`)
+- **Probe (`ffprobe`):** `docs/validation/prefill-recording.mp4` — duration `29.997389s`, stream `1080x2400` (`r_frame_rate` reported as `90000/1` by ffprobe; frame extraction performed at `fps=10`).
+- **Extraction:** `ffmpeg -i docs/validation/prefill-recording.mp4 -t 20 -vf fps=10 /tmp/opencode/frames/f_%04d.png` (200 frames, first 20 s; 1080x2400). Send tap was ~1 s into recording, so prefill window is expected early in extracted sequence.
+- **Scene-change signal (cheap check, `select='gt(scene,0.01)',showinfo`, first 20 s):**
+  - Status band crop `1080x420+0+1150`: detected changes reported at `pts_time=0.624022`, `0.714233`, `0.846056` and a later `29.206222` (outside 0–20 s analysis window tail context from full decode).
+  - Composer band crop `1080x420+0+2050`: no frames reported above threshold in the captured `showinfo` grep output for 0–20 s.
+- **Contact sheets (cropped for legibility, `crop=1080:420:*`, scaled, `tile=3x6` over selected 10 fps frames):**
+  - `docs/validation/prefill-contact-1.png` — status band `1080x420+0+1150`, **t=0–6 s** (`n=0..59`).
+  - `docs/validation/prefill-contact-2.png` — status band `1080x420+0+1150`, **t=6–12 s** (`n=60..119`).
+  - `docs/validation/prefill-contact-3.png` — status band `1080x420+0+1150`, **t=12–18 s** (`n=120..179`).
+  - Additional crops/sheets: `prefill-contact-status-crop-0-6s/6-12s/12-18s.png`, `prefill-contact-composer-0-6s/6-12s/12-18s.png` (`1080x420+0+2050`), and `prefill-contact-status-0-6s/6-12s/12-18s.png` (uncropped status sheets).
+- **Candidate exported frame:** `docs/validation/prefill-frame.png` = extracted `f_0020.png` (~2.0 s into recording, ~1 s after send tap) as a promising early frame for visual review. **Text not machine-read in this pass** (no OCR/vision confirmation here); whether it shows a prefill-percentage status line distinct from `0 tok · 0.0 tok/s` is unconfirmed — contact sheets and frame retained for vision review.
+- **Outcome:** a definitive prefill-percentage frame/text was **not confirmed** from this offline extraction pass alone; likely candidates (if any) are in early 0–6 s status/contact-sheet region around scene changes ~0.62–0.85 s and nearby extracted frames.
