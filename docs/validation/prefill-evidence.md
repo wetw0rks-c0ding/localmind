@@ -80,3 +80,32 @@ on-device, Pixel 6 `1B181FDF60043F`, 523-char prompt.
 
 Same run showed `29% → 74% → 99%` across consecutive frames: the ticker
 advances the estimate and both label and arc clamp at 99% until first token.
+
+## Placement states on final PR build (714af42)
+
+Built from `/home/missioncontrol/localmind-pr` at `714af42` (`flutter build apk --debug`,
+APK `app-debug.apk` built 2026-11-15 21:23:44), installed with `adb install -r` at
+21:24:19 (`dumpsys package pro.momin.localmind` → `lastUpdateTime=2026-11-15 21:24:19`,
+`versionName=1.9.1`, `firstInstallTime=2026-11-15 01:02:35`). Pixel 6 `1B181FDF60043F`,
+1080x2400, Qwen 3 0.6B (on-device, loaded via picker; a `Load` tap was required after the
+reinstall — send without loading opens the picker with toast `You need to select a model
+first`), debug build, animations 0 for the run.
+
+- `prefill-pr-centered.png` — STATE A (centered in-field, empty field). Frame (~3.0 s into
+  send) from `screenrecord` of a 645-char prompt send. Input field is empty; the status
+  line reads **`Processing prompt… 85%`** (arc + text), horizontally centered inside the
+  input field. Cropped read: `…` is a single ellipsis glyph; arc ~85% filled.
+- `prefill-pr-typing.png` — STATE B (corner row, typing). Same session, second long-prompt
+  send; while prefill was still running, a short prompt (`short follow-up question`) was
+  typed into the field and NOT sent. Screenshot shows the typed text in the field with the
+  status line in a small top-left corner row above it reading **`Processing prompt… 99%`**
+  (arc icon to the left of the label).
+
+Video frames extracted at `fps=10` to `/tmp/opencode/prefill-pr/frames-b/`
+(`f_0028.png` = `… 71%`, `f_0030.png` = `… 85%`, both centered in-field, empty field);
+`/tmp/opencode/prefill-pr/06-stateB.png` is the STATE B screenshot. `prefill-pr-a.mp4`
+captured the pre-model-load failure (send with no model loaded → model picker sheet +
+`You need to select a model first` toast), kept for reference.
+
+**Animations restored:** `window_animation_scale`, `transition_animation_scale`,
+`animator_duration_scale` set back to `1`; `stay_on_while_plugged_in` set to `0`.
