@@ -439,7 +439,10 @@ class ConversationsNotifier extends AsyncNotifier<List<Conversation>> {
     });
 
     if (updated == null) return;
-    _updateInState(updated);
+    final published = cached == null
+        ? updated
+        : cached.copyWith(promptsProcessed: updated.promptsProcessed);
+    _updateInState(published);
   }
 
   Future<void> updatePersonas(String id, List<Persona> personas) async {

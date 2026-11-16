@@ -334,6 +334,17 @@ class DataBackupService {
         )) {
       throw const FormatException('Cloud payload contains excluded records');
     }
+    if ((payload['conversations'] as List).any((record) {
+      final map = record as Map;
+      if (!map.containsKey('promptsProcessed')) return false;
+      final value = map['promptsProcessed'];
+      if (value == null) return false;
+      return parseImportedPromptsProcessed(value) == null;
+    })) {
+      throw const FormatException(
+        'Invalid cloud sync conversation promptsProcessed',
+      );
+    }
   }
 
   Map<String, dynamic> exportConversations(Store store) {

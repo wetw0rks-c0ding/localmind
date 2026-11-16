@@ -211,6 +211,33 @@ void main() {
     },
   );
 
+  test('cloud import rejects invalid promptsProcessed before replacement', () {
+    final payload = <String, dynamic>{
+      'version': 1,
+      'type': 'cloudSync',
+      'settings': <String, dynamic>{},
+      'conversations': <dynamic>[
+        <String, dynamic>{
+          'id': 'conv-1',
+          'title': 'Chat',
+          'createdAt': DateTime.utc(2026, 7, 10).toIso8601String(),
+          'updatedAt': DateTime.utc(2026, 7, 10).toIso8601String(),
+          'promptsProcessed': 'bad',
+        },
+      ],
+      'messages': <dynamic>[],
+      'personas': <dynamic>[],
+      'savedMessages': <dynamic>[],
+      'savedMessageFolders': <dynamic>[],
+      'conversationFolders': <dynamic>[],
+    };
+
+    expect(
+      DataBackupService().importCloudSync(_FakeStore(const {}), payload),
+      throwsFormatException,
+    );
+  });
+
   group('parseImportedPromptsProcessed', () {
     test('defaults to 0 when missing', () {
       expect(DataBackupService.parseImportedPromptsProcessed(null), 0);
