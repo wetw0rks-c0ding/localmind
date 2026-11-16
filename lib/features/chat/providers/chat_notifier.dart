@@ -339,7 +339,11 @@ class ChatNotifier extends Notifier<ChatState> {
     session.latestMessage = null;
     _endSession(session);
     if (_activeConversationId == conversationId) {
-      state = state.copyWith(isStreaming: false, clearStreaming: true);
+      state = state.copyWith(
+        isStreaming: false,
+        clearStreaming: true,
+        clearLiveGeneration: true,
+      );
     }
   }
 
@@ -2055,7 +2059,11 @@ class ChatNotifier extends Notifier<ChatState> {
     }
 
     if (!ref.mounted) return;
-    state = state.copyWith(isStreaming: false, clearStreaming: true);
+    state = state.copyWith(
+      isStreaming: false,
+      clearStreaming: true,
+      clearLiveGeneration: true,
+    );
     session?.latestMessage = null;
     if (session != null) _endSession(session);
   }
@@ -2574,6 +2582,7 @@ class ChatNotifier extends Notifier<ChatState> {
       continuationMessage.conversationId,
       origin.server,
       origin.chatService,
+      countsAsPrompt: origin.countsAsPrompt && !origin.promptCounted,
     );
     await _runAssistantStream(
       session,

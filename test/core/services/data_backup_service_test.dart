@@ -210,6 +210,34 @@ void main() {
       );
     },
   );
+
+  group('parseImportedPromptsProcessed', () {
+    test('defaults to 0 when missing', () {
+      expect(DataBackupService.parseImportedPromptsProcessed(null), 0);
+    });
+
+    test('clamps negative values to 0', () {
+      expect(DataBackupService.parseImportedPromptsProcessed(-1), 0);
+      expect(DataBackupService.parseImportedPromptsProcessed(-42), 0);
+    });
+
+    test('accepts non-negative integers', () {
+      expect(DataBackupService.parseImportedPromptsProcessed(0), 0);
+      expect(DataBackupService.parseImportedPromptsProcessed(7), 7);
+    });
+
+    test('accepts whole-number doubles', () {
+      expect(DataBackupService.parseImportedPromptsProcessed(3.0), 3);
+    });
+
+    test('rejects wrong types so import can skip without aborting', () {
+      expect(DataBackupService.parseImportedPromptsProcessed('5'), isNull);
+      expect(DataBackupService.parseImportedPromptsProcessed(true), isNull);
+      expect(DataBackupService.parseImportedPromptsProcessed(1.5), isNull);
+      expect(DataBackupService.parseImportedPromptsProcessed([1]), isNull);
+      expect(DataBackupService.parseImportedPromptsProcessed({'v': 1}), isNull);
+    });
+  });
 }
 
 class _FakeStore extends Fake implements Store {

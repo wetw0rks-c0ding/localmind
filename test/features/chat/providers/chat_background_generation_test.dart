@@ -131,6 +131,16 @@ void main() {
               .toolCalls,
           hasLength(2),
         );
+        final conversations =
+            container.read(conv.conversationsProvider.notifier)
+                as _FakeConversationsNotifier;
+        expect(
+          conversations.incrementedPromptConversationIds
+              .where((id) => id == 'conversation-a')
+              .length,
+          1,
+          reason: 'successful tool turn should count the prompt exactly once',
+        );
         await notifier.sendMessage('Follow-up question.');
         expect(
           chatService.requests.last.map((message) => message.content),
@@ -294,6 +304,27 @@ void main() {
     expect(chatService.cancelCount, 1);
     expect(container.read(activeGenerationsProvider), isEmpty);
     expect(container.read(isStreamingProvider), isFalse);
+  });
+
+  test('cancelGenerationFor clears live status for the active chat', () async {
+    await startReplyInA();
+    expect(container.read(chatProvider).liveGeneration, isNotNull);
+
+    await notifier.cancelGenerationFor('conversation-a');
+
+    expect(container.read(chatProvider).isStreaming, isFalse);
+    expect(container.read(chatProvider).liveGeneration, isNull);
+  });
+
+  test('cancelStream clears live status after Stop', () async {
+    await startReplyInA();
+    expect(container.read(chatProvider).liveGeneration, isNotNull);
+
+    await notifier.cancelStream();
+    await _pump();
+
+    expect(container.read(chatProvider).isStreaming, isFalse);
+    expect(container.read(chatProvider).liveGeneration, isNull);
   });
 
   test('stopping one reply cancels only that service, not the other', () async {
@@ -470,11 +501,9 @@ void main() {
 
     expect(c.read(chatProvider).errorMessage, onDeviceBusyMessage);
     expect(onDeviceService.controllers, hasLength(1));
-    expect(
-      c.read(activeGenerationsProvider).keys,
-      ['conversation-a'],
-      reason: 'the on-device reply in A keeps running',
-    );
+    expect(c.read(activeGenerationsProvider).keys, [
+      'conversation-a',
+    ], reason: 'the on-device reply in A keeps running');
     expect(onDeviceService.cancelCount, 0);
 
     // Once it finishes, the other chat may send.
@@ -692,6 +721,8 @@ class _TestMcpToolProvider implements ToolProvider {
 }
 
 class _FakeConversationsNotifier extends conv.ConversationsNotifier {
+  final List<String> incrementedPromptConversationIds = [];
+
   @override
   Future<List<Conversation>> build() async => [_conversationA, _conversationB];
 
@@ -707,7 +738,9 @@ class _FakeConversationsNotifier extends conv.ConversationsNotifier {
   Future<void> updateTokenCount(String id, int totalTokenCount) async {}
 
   @override
-  Future<void> incrementPromptsProcessed(String id) async {}
+  Future<void> incrementPromptsProcessed(String id) async {
+    incrementedPromptConversationIds.add(id);
+  }
 }
 
 class _RemoteServerNotifier extends ActiveServerNotifier {

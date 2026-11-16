@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:archive/archive.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -713,6 +714,11 @@ class DataBackupService {
           final createdAt = backupImportDateTime(item['createdAt']);
           final updatedAt = backupImportDateTime(item['updatedAt']);
           if (id == null || createdAt == null || updatedAt == null) continue;
+          final promptsProcessed = parseImportedPromptsProcessed(
+            item['promptsProcessed'],
+          );
+          if (promptsProcessed == null) continue;
+
           final conversation = Conversation(
             id: id,
             title: item['title'] as String? ?? 'Imported Chat',
@@ -740,7 +746,7 @@ class DataBackupService {
             isArchived: item['isArchived'] as bool? ?? false,
             characterCount: item['characterCount'] as int? ?? 0,
             totalTokenCount: item['totalTokenCount'] as int?,
-            promptsProcessed: item['promptsProcessed'] as int? ?? 0,
+            promptsProcessed: promptsProcessed,
           );
           final query = convBox
               .query(ConversationEntity_.id.equals(conversation.id))
@@ -910,6 +916,25 @@ class DataBackupService {
         );
       }
     }, (decoded, attachmentsDir, replaceCloudData));
+  }
+
+  /// Returns a sanitized prompts-processed count for a conversation backup
+  /// item. Missing/null values default to 0 for older backups. Negative values
+  /// are clamped to 0. Non-integer values are rejected so the conversation can
+  /// be skipped without aborting the whole import.
+  @visibleForTesting
+  static int? parseImportedPromptsProcessed(dynamic value) {
+    if (value == null) return 0;
+    if (value is bool) return null;
+    if (value is int) return value < 0 ? 0 : value;
+    if (value is double) {
+      if (!value.isFinite || value.truncateToDouble() != value) {
+        return null;
+      }
+      final intValue = value.toInt();
+      return intValue < 0 ? 0 : intValue;
+    }
+    return null;
   }
 
   List<String>? _sanitizedAttachmentPaths(dynamic raw, String attachmentsDir) {

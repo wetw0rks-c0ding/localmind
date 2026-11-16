@@ -408,29 +408,37 @@ class ConversationsNotifier extends AsyncNotifier<List<Conversation>> {
   /// user prompt produces a successful reply. Does not touch `updatedAt`, so
   /// the chat is not re-sorted just because a counter changed. Temporary
   /// (incognito) conversations are never counted.
+  ///
+  /// Reads and updates the stored row in one write transaction so a concurrent
+  /// metadata write cannot be overwritten by a stale cached copy.
   Future<void> incrementPromptsProcessed(String id) async {
     final db = ref.read(databaseProvider);
     final conversations = state.value ?? [];
     final existingIndex = conversations.indexWhere((c) => c.id == id);
-    if (existingIndex == -1) return;
+    final cached = existingIndex == -1 ? null : conversations[existingIndex];
+    if (cached?.isTemporary == true) return;
 
-    final existing = conversations[existingIndex];
-    if (existing.isTemporary) return;
+    final updated = db.store.runInTransaction(TxMode.write, () {
+      final query = db.conversationBox
+          .query(ConversationEntity_.id.equals(id))
+          .build();
+      final existingEntity = query.findFirst();
+      query.close();
+      if (existingEntity == null) return null;
 
-    final updated = existing.copyWith(
-      promptsProcessed: existing.promptsProcessed + 1,
-    );
+      final current = existingEntity.toDomain();
+      if (current.isTemporary) return null;
 
-    final query = db.conversationBox
-        .query(ConversationEntity_.id.equals(id))
-        .build();
-    final existingEntity = query.findFirst();
-    query.close();
-    if (existingEntity == null) return;
+      final next = current.copyWith(
+        promptsProcessed: current.promptsProcessed + 1,
+      );
+      final entity = ConversationEntity.fromDomain(next);
+      entity.internalId = existingEntity.internalId;
+      db.conversationBox.put(entity);
+      return next;
+    });
 
-    final entity = ConversationEntity.fromDomain(updated);
-    entity.internalId = existingEntity.internalId;
-    db.conversationBox.put(entity);
+    if (updated == null) return;
     _updateInState(updated);
   }
 
