@@ -43,10 +43,18 @@ class ConversationsNotifier extends AsyncNotifier<List<Conversation>> {
   }
 
   Future<void> _updateState() async {
-    final epoch = _reloadEpoch;
-    final data = await _loadAll();
-    if (ref.mounted && epoch == _reloadEpoch) {
-      state = AsyncData(data);
+    while (true) {
+      final epoch = _reloadEpoch;
+      final data = await _loadAll();
+      if (!ref.mounted) return;
+      if (epoch == _reloadEpoch) {
+        state = AsyncData(data);
+        return;
+      }
+      // A counter increment advanced the epoch while this reload was in flight.
+      // Retry so membership/metadata changes carried by this reload are not
+      // discarded; the next pass reloads from DB, which already contains the
+      // committed counter update.
     }
   }
 
