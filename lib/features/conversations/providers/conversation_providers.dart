@@ -21,6 +21,12 @@ final conversationsProvider =
     });
 
 class ConversationsNotifier extends AsyncNotifier<List<Conversation>> {
+  /// Monotonic guard against stale full reloads republishing an older
+  /// `promptsProcessed` after a counter increment commits and publishes.
+  /// Bumped by [incrementPromptsProcessed] after its write transaction
+  /// commits; [_updateState] discards a reload that started before the bump.
+  int _reloadEpoch = 0;
+
   @override
   Future<List<Conversation>> build() async {
     return _loadAll();
@@ -37,8 +43,9 @@ class ConversationsNotifier extends AsyncNotifier<List<Conversation>> {
   }
 
   Future<void> _updateState() async {
+    final epoch = _reloadEpoch;
     final data = await _loadAll();
-    if (ref.mounted) {
+    if (ref.mounted && epoch == _reloadEpoch) {
       state = AsyncData(data);
     }
   }
@@ -388,18 +395,26 @@ class ConversationsNotifier extends AsyncNotifier<List<Conversation>> {
     if (existingIndex == -1) return;
 
     final existing = conversations[existingIndex];
-    final updated = existing.copyWith(totalTokenCount: totalTokenCount);
 
     final query = db.conversationBox
         .query(ConversationEntity_.id.equals(id))
         .build();
     final existingEntity = query.findFirst();
     query.close();
+    if (existingEntity == null) return;
+
+    // Preserve the stored `promptsProcessed` from the DB row actually written,
+    // not the cached value: a token recount is dispatched unawaited and can
+    // race with incrementPromptsProcessed, so building from cache would copy a
+    // stale counter back into the DB.
+    final stored = existingEntity.toDomain();
+    final updated = existing.copyWith(
+      totalTokenCount: totalTokenCount,
+      promptsProcessed: stored.promptsProcessed,
+    );
 
     final entity = ConversationEntity.fromDomain(updated);
-    if (existingEntity != null) {
-      entity.internalId = existingEntity.internalId;
-    }
+    entity.internalId = existingEntity.internalId;
     db.conversationBox.put(entity);
     await _updateState();
   }
@@ -439,6 +454,10 @@ class ConversationsNotifier extends AsyncNotifier<List<Conversation>> {
     });
 
     if (updated == null) return;
+    // The counter write committed above; invalidate reloads that started before
+    // this point so they cannot republish an older promptsProcessed over the
+    // value we publish next.
+    _reloadEpoch++;
     final published = cached == null
         ? updated
         : cached.copyWith(promptsProcessed: updated.promptsProcessed);
